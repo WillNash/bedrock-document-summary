@@ -3,6 +3,8 @@ import json
 import logging
 import os
 
+from botocore.exceptions import ClientError
+
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
@@ -11,13 +13,18 @@ s3_client = boto3.client('s3')
 
 
 def lambda_handler(event, context):
+    claims = event['requestContext']['authorizer']['jwt']['claims']
+    user_id = claims['sub']
+
     job_id = event['pathParameters']['jobId']
 
     table = dynamodb.Table(os.environ['JOBS_TABLE'])
     response = table.get_item(Key={'job_id': job_id})
     item = response.get('Item')
 
-    if not item:
+    # Return 404 for both missing jobs and jobs owned by another user —
+    # a 403 would confirm the job exists to an unauthorised caller.
+    if not item or item.get('user_id') != user_id:
         return {
             'statusCode': 404,
             'headers': {'Content-Type': 'application/json'},
@@ -37,13 +44,15 @@ def lambda_handler(event, context):
     try:
         s3_response = s3_client.get_object(Bucket=summaries_bucket, Key=summary_key)
         summary_text = s3_response['Body'].read().decode('utf-8')
-    except s3_client.exceptions.NoSuchKey:
-        logger.error({'job_id': job_id, 'error': 'Summary file missing from S3'})
-        return {
-            'statusCode': 500,
-            'headers': {'Content-Type': 'application/json'},
-            'body': json.dumps({'error': 'Summary file not found'}),
-        }
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'NoSuchKey':
+            logger.error({'job_id': job_id, 'error': 'Summary file missing from S3'})
+            return {
+                'statusCode': 500,
+                'headers': {'Content-Type': 'application/json'},
+                'body': json.dumps({'error': 'Summary file not found'}),
+            }
+        raise
 
     return {
         'statusCode': 200,

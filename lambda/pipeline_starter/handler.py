@@ -39,21 +39,33 @@ def lambda_handler(event, context):
                 name=job_id,
                 input=execution_input,
             )
+            logger.info({'job_id': job_id, 'action': 'execution_started', 'key': key})
         except ClientError as e:
             if e.response['Error']['Code'] == 'ExecutionAlreadyExists':
-                # S3 event retry — execution is already running, nothing to do
+                # S3 event retry — execution is already running. Fall through
+                # to the DynamoDB update below in case the first delivery's
+                # write failed before completing.
                 logger.info({'job_id': job_id, 'action': 'execution_already_exists'})
-                continue
-            raise
+            else:
+                raise
 
+        # Update status to RUNNING. Use a condition so we never overwrite
+        # a terminal status (COMPLETED/FAILED) if the pipeline has already
+        # finished by the time a retry event arrives.
         table = dynamodb.Table(jobs_table)
-        table.update_item(
-            Key={'job_id': job_id},
-            UpdateExpression='SET #s = :s',
-            ExpressionAttributeNames={'#s': 'status'},
-            ExpressionAttributeValues={':s': 'RUNNING'},
-        )
-
-        logger.info({'job_id': job_id, 'action': 'execution_started', 'key': key})
+        try:
+            table.update_item(
+                Key={'job_id': job_id},
+                UpdateExpression='SET #s = :running',
+                ConditionExpression='#s = :pending',
+                ExpressionAttributeNames={'#s': 'status'},
+                ExpressionAttributeValues={':running': 'RUNNING', ':pending': 'PENDING'},
+            )
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+                # Status has already been updated past PENDING — nothing to do.
+                logger.info({'job_id': job_id, 'action': 'status_already_progressed'})
+            else:
+                raise
 
     return {'statusCode': 200}

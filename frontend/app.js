@@ -29,6 +29,19 @@ async function generatePKCE() {
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
+function getTokenExpiry(token) {
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+    return payload.exp * 1000;
+  } catch {
+    return 0;
+  }
+}
+
+function isTokenExpired(token) {
+  return !token || Date.now() >= getTokenExpiry(token);
+}
+
 function getStoredToken() {
   return sessionStorage.getItem('id_token');
 }
@@ -42,6 +55,13 @@ function clearTokens() {
   sessionStorage.removeItem('id_token');
   sessionStorage.removeItem('access_token');
   sessionStorage.removeItem('pkce_verifier');
+}
+
+function handleSessionExpired() {
+  clearTokens();
+  idToken = null;
+  showError('Your session has expired. Please sign in again.');
+  setTimeout(showAuth, 2000);
 }
 
 async function startSignIn() {
@@ -147,6 +167,11 @@ function showError(message) {
 async function handleFile(file) {
   if (!file) return;
 
+  if (isTokenExpired(idToken)) {
+    handleSessionExpired();
+    return;
+  }
+
   showStatus('Requesting upload URL...');
 
   const presignRes = await fetch(`${API_URL}/presign`, {
@@ -158,8 +183,10 @@ async function handleFile(file) {
     body: JSON.stringify({ filename: file.name }),
   });
 
+  if (presignRes.status === 401) { handleSessionExpired(); return; }
   if (!presignRes.ok) {
-    showError('Failed to get upload URL. Please try again.');
+    const data = await presignRes.json().catch(() => ({}));
+    showError(data.error || 'Failed to get upload URL. Please try again.');
     return;
   }
 
@@ -194,10 +221,18 @@ function startPolling(jobId) {
   };
 
   pollTimer = setInterval(async () => {
-    const res = await fetch(`${API_URL}/jobs/${jobId}`, {
-      headers: { 'Authorization': `Bearer ${idToken}` },
-    });
+    if (isTokenExpired(idToken)) { handleSessionExpired(); return; }
 
+    let res;
+    try {
+      res = await fetch(`${API_URL}/jobs/${jobId}`, {
+        headers: { 'Authorization': `Bearer ${idToken}` },
+      });
+    } catch {
+      return; // network blip — try again next interval
+    }
+
+    if (res.status === 401) { handleSessionExpired(); return; }
     if (!res.ok) return;
 
     const data = await res.json();
@@ -234,10 +269,11 @@ async function init() {
   }
 
   const stored = getStoredToken();
-  if (stored) {
+  if (stored && !isTokenExpired(stored)) {
     idToken = stored;
     showUpload();
   } else {
+    clearTokens();
     showAuth();
   }
 }

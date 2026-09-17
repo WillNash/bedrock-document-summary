@@ -2,7 +2,6 @@ import boto3
 import json
 import logging
 import os
-from boto3.dynamodb.conditions import Key
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -11,13 +10,18 @@ dynamodb = boto3.resource('dynamodb')
 
 
 def lambda_handler(event, context):
+    claims = event['requestContext']['authorizer']['jwt']['claims']
+    user_id = claims['sub']
+
     job_id = event['pathParameters']['jobId']
 
     table = dynamodb.Table(os.environ['JOBS_TABLE'])
     response = table.get_item(Key={'job_id': job_id})
     item = response.get('Item')
 
-    if not item:
+    # Return 404 for both missing jobs and jobs owned by another user —
+    # a 403 would confirm the job exists to an unauthorised caller.
+    if not item or item.get('user_id') != user_id:
         return {
             'statusCode': 404,
             'headers': {'Content-Type': 'application/json'},
