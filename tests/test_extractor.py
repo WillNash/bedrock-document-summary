@@ -1,7 +1,7 @@
 """Unit tests for the extractor Lambda handler."""
+import importlib.util
 import json
 import os
-import sys
 from pathlib import Path
 from unittest import mock
 
@@ -9,7 +9,6 @@ import pytest
 
 EXTRACTOR_DIR = Path(__file__).parent.parent / 'lambda' / 'extractor'
 SCHEMAS_DIR = Path(__file__).parent.parent / 'schemas'
-sys.path.insert(0, str(EXTRACTOR_DIR))
 
 PROMPT_ARNS = {
     'lab_result': 'arn:aws:bedrock:us-east-1:123456789:prompt/lab',
@@ -49,7 +48,9 @@ EXTRACTED_LAB_RESULT = {
     'notes': None,
 }
 
-import handler  # noqa: E402 — sys.path must be set first
+_spec = importlib.util.spec_from_file_location('extractor_handler', EXTRACTOR_DIR / 'handler.py')
+handler = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(handler)
 
 
 def make_tool_use_response(tool_input):

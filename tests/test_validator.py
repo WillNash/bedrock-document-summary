@@ -1,5 +1,5 @@
 """Unit tests for the validator Lambda handler."""
-import sys
+import importlib.util
 from pathlib import Path
 from unittest import mock
 
@@ -8,10 +8,10 @@ import pytest
 
 VALIDATOR_DIR = Path(__file__).parent.parent / 'lambda' / 'validator'
 SCHEMAS_DIR = Path(__file__).parent.parent / 'schemas'
-sys.path.insert(0, str(VALIDATOR_DIR))
 
-with mock.patch.dict('os.environ', {'JOBS_TABLE': 'test-jobs'}):
-    import handler as validator_handler
+_spec = importlib.util.spec_from_file_location('validator_handler', VALIDATOR_DIR / 'handler.py')
+validator_handler = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(validator_handler)
 
 
 @pytest.fixture(autouse=True)

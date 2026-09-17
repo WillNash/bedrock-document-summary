@@ -10,20 +10,22 @@ locals {
 
 # ── Pipeline failure alarms ───────────────────────────────────────────────────
 
-resource "aws_cloudwatch_metric_alarm" "sfn_failures" {
+# Express Workflows do NOT emit ExecutionsFailed — use fail_handler invocations instead.
+# Every invocation of fail_handler represents exactly one failed document.
+resource "aws_cloudwatch_metric_alarm" "fail_handler_invocations" {
   alarm_name          = "${local.name_prefix}-pipeline-failures"
-  alarm_description   = "Step Functions executions are failing — documents are not being processed"
+  alarm_description   = "fail_handler Lambda invocations — documents have failed processing"
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = 1
-  metric_name         = "ExecutionsFailed"
-  namespace           = "AWS/States"
+  metric_name         = "Invocations"
+  namespace           = "AWS/Lambda"
   period              = 300
   statistic           = "Sum"
   threshold           = 0
   treat_missing_data  = "notBreaching"
 
   dimensions = {
-    StateMachineArn = aws_sfn_state_machine.pipeline.arn
+    FunctionName = aws_lambda_function.fail_handler.function_name
   }
 
   alarm_actions = local.alert_actions

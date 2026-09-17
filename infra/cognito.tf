@@ -22,6 +22,10 @@ resource "aws_cognito_user_pool" "main" {
 
   mfa_configuration = "OPTIONAL"
 
+  software_token_mfa_configuration {
+    enabled = true
+  }
+
   tags = local.common_tags
 }
 

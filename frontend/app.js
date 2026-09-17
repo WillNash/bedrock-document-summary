@@ -215,6 +215,7 @@ async function handleFile(file) {
 
 function startPolling(jobId) {
   const POLL_INTERVAL_MS = 5000;
+  const MAX_POLL_TICKS = 120; // 10 minutes at 5-second intervals
   const STATUS_LABELS = {
     PENDING:  'Waiting to process...',
     RUNNING:  'Processing document...',
@@ -222,7 +223,14 @@ function startPolling(jobId) {
     COMPLETED: null,
   };
 
+  let pollTick = 0;
   pollTimer = setInterval(async () => {
+    pollTick++;
+    if (pollTick > MAX_POLL_TICKS) {
+      showError('Processing timed out. Please try again or contact support.');
+      return;
+    }
+
     if (isTokenExpired(idToken)) { handleSessionExpired(); return; }
 
     let res;

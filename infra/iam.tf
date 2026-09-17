@@ -67,12 +67,8 @@ resource "aws_iam_role_policy" "api_dynamodb" {
         "dynamodb:PutItem",
         "dynamodb:GetItem",
         "dynamodb:UpdateItem",
-        "dynamodb:Query",
       ]
-      Resource = [
-        aws_dynamodb_table.jobs.arn,
-        "${aws_dynamodb_table.jobs.arn}/index/*",
-      ]
+      Resource = aws_dynamodb_table.jobs.arn
     }]
   })
 }

@@ -118,7 +118,7 @@ resource "aws_s3_bucket_cors_configuration" "uploads" {
 
   cors_rule {
     allowed_headers = ["*"]
-    allowed_methods = ["POST", "PUT"]
+    allowed_methods = ["POST"]
     allowed_origins = ["https://${aws_cloudfront_distribution.frontend.domain_name}"]
     expose_headers  = []
     max_age_seconds = 3000

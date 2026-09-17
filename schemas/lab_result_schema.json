@@ -32,6 +32,7 @@
           "results": {
             "type": "array",
             "description": "Individual test results within the panel",
+            "minItems": 1,
             "items": {
               "type": "object",
               "required": ["name", "value", "unit"],

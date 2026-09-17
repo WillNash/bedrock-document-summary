@@ -335,12 +335,6 @@ resource "aws_lambda_function" "validator" {
   memory_size      = 256
   layers           = [aws_lambda_layer_version.deps.arn]
 
-  environment {
-    variables = {
-      JOBS_TABLE = aws_dynamodb_table.jobs.name
-    }
-  }
-
   tracing_config {
     mode = "Active"
   }

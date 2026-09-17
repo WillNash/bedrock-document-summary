@@ -1,7 +1,7 @@
 """Unit tests for the classifier Lambda handler."""
+import importlib.util
 import json
 import os
-import sys
 from pathlib import Path
 from unittest import mock
 
@@ -9,7 +9,6 @@ import pytest
 from botocore.exceptions import ClientError
 
 CLASSIFIER_DIR = Path(__file__).parent.parent / 'lambda' / 'classifier'
-sys.path.insert(0, str(CLASSIFIER_DIR))
 
 MOCK_ENV = {
     'CLASSIFIER_PROMPT_ARN': 'arn:aws:bedrock:us-east-1:123456789:prompt/abc123',
@@ -28,7 +27,9 @@ MOCK_PROMPT_RESPONSE = {
     ]
 }
 
-import handler  # noqa: E402 — sys.path must be set first
+_spec = importlib.util.spec_from_file_location('classifier_handler', CLASSIFIER_DIR / 'handler.py')
+handler = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(handler)
 
 
 def make_converse_response(label):
@@ -78,8 +79,8 @@ class TestClassifierLabels:
         assert result['doc_type'] == label
         assert result['job_id'] == 'job-1'
 
-    def test_unstripped_whitespace_label_rejected(self):
-        """Handler lowercases but does not strip — whitespace-padded labels are rejected."""
+    def test_whitespace_padded_label_accepted(self):
+        """Handler strips and lowercases before matching — padded labels are accepted."""
         with mock.patch.object(handler, 'bedrock_agent') as mock_agent, \
              mock.patch.object(handler, 'bedrock_runtime') as mock_runtime, \
              mock.patch.object(handler, 's3_client') as mock_s3:
@@ -88,11 +89,12 @@ class TestClassifierLabels:
             mock_runtime.converse.return_value = make_converse_response('  Lab_Result  ')
             mock_s3.get_object.return_value = make_s3_response()
 
-            with pytest.raises(ValueError, match='unknown doc type'):
-                handler.lambda_handler(
-                    {'job_id': 'job-1', 'bucket': 'b', 'key': 'uploads/job-1/doc.txt'},
-                    None,
-                )
+            result = handler.lambda_handler(
+                {'job_id': 'job-1', 'bucket': 'b', 'key': 'uploads/job-1/doc.txt'},
+                None,
+            )
+
+        assert result['doc_type'] == 'lab_result'
 
 
 class TestClassifierErrorHandling:

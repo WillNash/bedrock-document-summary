@@ -92,6 +92,19 @@
     "MarkJobFailed": {
       "Type": "Task",
       "Resource": "${fail_handler_lambda_arn}",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
       "Next": "JobFailed"
     },
     "JobFailed": {
