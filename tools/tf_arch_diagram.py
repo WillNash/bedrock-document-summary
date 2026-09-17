@@ -20,13 +20,13 @@ Usage:
 import argparse
 import base64
 import json
-import os
 import re
 import sys
 import tempfile
 import webbrowser
 from datetime import date
 from pathlib import Path
+from typing import Any, Final, NamedTuple, TypeAlias
 
 try:
     import hcl2
@@ -39,64 +39,81 @@ except ImportError:
     sys.exit("Error: pyvis is not installed. Run: pip install pyvis")
 
 
-# ── Resource catalog ──────────────────────────────────────────────────────────
-# Maps Terraform resource type → (service_label, group, icon_key)
-# group="Support" marks auxiliary resources shown as small dots or hidden.
+# ── Type aliases ──────────────────────────────────────────────────────────────
+# hcl2 returns untyped nested dicts at an external boundary; Any is justified.
+Attrs: TypeAlias = dict[str, Any]
+Registry: TypeAlias = dict[str, Attrs]
+GroupNodes: TypeAlias = dict[str, list[str]]
 
-RESOURCE_CATALOG: dict[str, tuple[str, str, str]] = {
+
+# ── Resource catalog ──────────────────────────────────────────────────────────
+
+class ResourceEntry(NamedTuple):
+    label: str
+    group: str
+    icon_key: str
+
+
+_SUPPORT_GROUP: Final = "Support"
+_AWS_PREFIX_LEN: Final = len("aws_")  # rfind start position to preserve the 'aws_' prefix
+_DEFAULT_ENTRY = ResourceEntry(label="", group="Other", icon_key="")
+
+# Maps Terraform resource type → ResourceEntry(label, group, icon_key).
+# group=_SUPPORT_GROUP marks auxiliary resources shown as small dots or hidden.
+RESOURCE_CATALOG: dict[str, ResourceEntry] = {
     # Compute
-    "aws_lambda_function":                               ("Lambda",              "Compute",       "lambda"),
-    "aws_lambda_layer_version":                          ("Lambda Layer",         "Compute",       "lambda-layer"),
+    "aws_lambda_function":                               ResourceEntry("Lambda",             "Compute",       "lambda"),
+    "aws_lambda_layer_version":                          ResourceEntry("Lambda Layer",        "Compute",       "lambda-layer"),
     # Orchestration
-    "aws_sfn_state_machine":                             ("Step Functions",       "Orchestration", "step-functions"),
+    "aws_sfn_state_machine":                             ResourceEntry("Step Functions",      "Orchestration", "step-functions"),
     # Networking
-    "aws_apigatewayv2_api":                              ("API Gateway",          "Networking",    "api-gateway"),
-    "aws_cloudfront_distribution":                       ("CloudFront",           "Networking",    "cloudfront"),
+    "aws_apigatewayv2_api":                              ResourceEntry("API Gateway",         "Networking",    "api-gateway"),
+    "aws_cloudfront_distribution":                       ResourceEntry("CloudFront",          "Networking",    "cloudfront"),
     # Auth
-    "aws_cognito_user_pool":                             ("Cognito",              "Auth",          "cognito"),
+    "aws_cognito_user_pool":                             ResourceEntry("Cognito",             "Auth",          "cognito"),
     # Storage
-    "aws_s3_bucket":                                     ("S3",                   "Storage",       "s3"),
+    "aws_s3_bucket":                                     ResourceEntry("S3",                  "Storage",       "s3"),
     # Database
-    "aws_dynamodb_table":                                ("DynamoDB",             "Database",      "dynamodb"),
+    "aws_dynamodb_table":                                ResourceEntry("DynamoDB",            "Database",      "dynamodb"),
     # Security
-    "aws_kms_key":                                       ("KMS",                  "Security",      "kms"),
-    "aws_iam_role":                                      ("IAM Role",             "Security",      "iam"),
-    "aws_wafv2_web_acl":                                 ("WAF",                  "Security",      "waf"),
+    "aws_kms_key":                                       ResourceEntry("KMS",                 "Security",      "kms"),
+    "aws_iam_role":                                      ResourceEntry("IAM Role",            "Security",      "iam"),
+    "aws_wafv2_web_acl":                                 ResourceEntry("WAF",                 "Security",      "waf"),
     # Messaging
-    "aws_sqs_queue":                                     ("SQS",                  "Messaging",     "sqs"),
-    "aws_sns_topic":                                     ("SNS",                  "Messaging",     "sns"),
+    "aws_sqs_queue":                                     ResourceEntry("SQS",                 "Messaging",     "sqs"),
+    "aws_sns_topic":                                     ResourceEntry("SNS",                 "Messaging",     "sns"),
     # AI/ML
-    "aws_bedrock_guardrail":                             ("Bedrock Guardrail",    "AI/ML",         "bedrock"),
-    "aws_bedrock_prompt":                                ("Bedrock Prompt",       "AI/ML",         "bedrock"),
+    "aws_bedrock_guardrail":                             ResourceEntry("Bedrock Guardrail",   "AI/ML",         "bedrock"),
+    "aws_bedrock_prompt":                                ResourceEntry("Bedrock Prompt",      "AI/ML",         "bedrock"),
     # Monitoring
-    "aws_cloudwatch_metric_alarm":                       ("CloudWatch Alarm",     "Monitoring",    "cloudwatch"),
+    "aws_cloudwatch_metric_alarm":                       ResourceEntry("CloudWatch Alarm",    "Monitoring",    "cloudwatch"),
     # Support resources — parsed for edges but shown as small dots or hidden
-    "aws_apigatewayv2_authorizer":                       ("API Authorizer",       "Support",       ""),
-    "aws_apigatewayv2_integration":                      ("API Integration",      "Support",       ""),
-    "aws_apigatewayv2_route":                            ("API Route",            "Support",       ""),
-    "aws_apigatewayv2_stage":                            ("API Stage",            "Support",       ""),
-    "aws_cloudwatch_log_group":                          ("Log Group",            "Support",       ""),
-    "aws_iam_role_policy":                               ("IAM Policy",           "Support",       ""),
-    "aws_iam_role_policy_attachment":                    ("IAM Attachment",       "Support",       ""),
-    "aws_lambda_function_event_invoke_config":           ("Lambda Config",        "Support",       ""),
-    "aws_lambda_permission":                             ("Lambda Permission",    "Support",       ""),
-    "aws_s3_bucket_cors_configuration":                  ("S3 CORS",              "Support",       ""),
-    "aws_s3_bucket_lifecycle_configuration":             ("S3 Lifecycle",         "Support",       ""),
-    "aws_s3_bucket_notification":                        ("S3 Notification",      "Support",       ""),
-    "aws_s3_bucket_policy":                              ("S3 Policy",            "Support",       ""),
-    "aws_s3_bucket_public_access_block":                 ("S3 Access Block",      "Support",       ""),
-    "aws_s3_bucket_server_side_encryption_configuration": ("S3 Encryption",       "Support",       ""),
-    "aws_s3_bucket_versioning":                          ("S3 Versioning",        "Support",       ""),
-    "aws_kms_alias":                                     ("KMS Alias",            "Support",       ""),
-    "aws_cloudfront_origin_access_control":              ("CF OAC",               "Support",       ""),
-    "aws_cognito_user_pool_client":                      ("Cognito Client",       "Support",       ""),
-    "aws_cognito_user_pool_domain":                      ("Cognito Domain",       "Support",       ""),
-    "aws_bedrock_guardrail_version":                     ("Guardrail Version",    "Support",       ""),
-    "aws_bedrock_prompt_version":                        ("Prompt Version",       "Support",       ""),
-    "aws_sns_topic_subscription":                        ("SNS Subscription",     "Support",       ""),
-    "aws_ce_anomaly_monitor":                            ("Cost Monitor",         "Support",       ""),
-    "aws_ce_anomaly_subscription":                       ("Cost Subscription",    "Support",       ""),
-    "aws_wafv2_web_acl_association":                     ("WAF Association",      "Support",       ""),
+    "aws_apigatewayv2_authorizer":                       ResourceEntry("API Authorizer",      _SUPPORT_GROUP,  ""),
+    "aws_apigatewayv2_integration":                      ResourceEntry("API Integration",     _SUPPORT_GROUP,  ""),
+    "aws_apigatewayv2_route":                            ResourceEntry("API Route",           _SUPPORT_GROUP,  ""),
+    "aws_apigatewayv2_stage":                            ResourceEntry("API Stage",           _SUPPORT_GROUP,  ""),
+    "aws_cloudwatch_log_group":                          ResourceEntry("Log Group",           _SUPPORT_GROUP,  ""),
+    "aws_iam_role_policy":                               ResourceEntry("IAM Policy",          _SUPPORT_GROUP,  ""),
+    "aws_iam_role_policy_attachment":                    ResourceEntry("IAM Attachment",      _SUPPORT_GROUP,  ""),
+    "aws_lambda_function_event_invoke_config":           ResourceEntry("Lambda Config",       _SUPPORT_GROUP,  ""),
+    "aws_lambda_permission":                             ResourceEntry("Lambda Permission",   _SUPPORT_GROUP,  ""),
+    "aws_s3_bucket_cors_configuration":                  ResourceEntry("S3 CORS",             _SUPPORT_GROUP,  ""),
+    "aws_s3_bucket_lifecycle_configuration":             ResourceEntry("S3 Lifecycle",        _SUPPORT_GROUP,  ""),
+    "aws_s3_bucket_notification":                        ResourceEntry("S3 Notification",     _SUPPORT_GROUP,  ""),
+    "aws_s3_bucket_policy":                              ResourceEntry("S3 Policy",           _SUPPORT_GROUP,  ""),
+    "aws_s3_bucket_public_access_block":                 ResourceEntry("S3 Access Block",     _SUPPORT_GROUP,  ""),
+    "aws_s3_bucket_server_side_encryption_configuration": ResourceEntry("S3 Encryption",      _SUPPORT_GROUP,  ""),
+    "aws_s3_bucket_versioning":                          ResourceEntry("S3 Versioning",       _SUPPORT_GROUP,  ""),
+    "aws_kms_alias":                                     ResourceEntry("KMS Alias",           _SUPPORT_GROUP,  ""),
+    "aws_cloudfront_origin_access_control":              ResourceEntry("CF OAC",              _SUPPORT_GROUP,  ""),
+    "aws_cognito_user_pool_client":                      ResourceEntry("Cognito Client",      _SUPPORT_GROUP,  ""),
+    "aws_cognito_user_pool_domain":                      ResourceEntry("Cognito Domain",      _SUPPORT_GROUP,  ""),
+    "aws_bedrock_guardrail_version":                     ResourceEntry("Guardrail Version",   _SUPPORT_GROUP,  ""),
+    "aws_bedrock_prompt_version":                        ResourceEntry("Prompt Version",      _SUPPORT_GROUP,  ""),
+    "aws_sns_topic_subscription":                        ResourceEntry("SNS Subscription",    _SUPPORT_GROUP,  ""),
+    "aws_ce_anomaly_monitor":                            ResourceEntry("Cost Monitor",        _SUPPORT_GROUP,  ""),
+    "aws_ce_anomaly_subscription":                       ResourceEntry("Cost Subscription",   _SUPPORT_GROUP,  ""),
+    "aws_wafv2_web_acl_association":                     ResourceEntry("WAF Association",     _SUPPORT_GROUP,  ""),
 }
 
 # ── Group colour palette ──────────────────────────────────────────────────────
@@ -111,36 +128,42 @@ GROUP_COLORS: dict[str, str] = {
     "Messaging":     "#FF4F8B",
     "AI/ML":         "#005E7A",
     "Monitoring":    "#E7157B",
-    "Support":       "#555555",
+    _SUPPORT_GROUP:  "#555555",
     "Other":         "#888888",
 }
 
 # ── Inline SVG icon generation ────────────────────────────────────────────────
 # These are original minimal SVGs, not reproductions of AWS artwork.
 
-_ICON_META: dict[str, tuple[str, str]] = {
-    # icon_key → (abbreviation, group)
-    "lambda":         ("λ FN",        "Compute"),
-    "lambda-layer":   ("λ Layer",     "Compute"),
-    "step-functions": ("SFN",         "Orchestration"),
-    "api-gateway":    ("APIGW",       "Networking"),
-    "cloudfront":     ("CF",          "Networking"),
-    "cognito":        ("Cognito",     "Auth"),
-    "s3":             ("S3",          "Storage"),
-    "dynamodb":       ("DDB",         "Database"),
-    "kms":            ("KMS",         "Security"),
-    "iam":            ("IAM",         "Security"),
-    "waf":            ("WAF",         "Security"),
-    "sqs":            ("SQS",         "Messaging"),
-    "sns":            ("SNS",         "Messaging"),
-    "bedrock":        ("Bedrock",     "AI/ML"),
-    "cloudwatch":     ("CW",          "Monitoring"),
+_ICON_ABBREVS: dict[str, str] = {
+    "lambda":         "λ FN",
+    "lambda-layer":   "λ Layer",
+    "step-functions": "SFN",
+    "api-gateway":    "APIGW",
+    "cloudfront":     "CF",
+    "cognito":        "Cognito",
+    "s3":             "S3",
+    "dynamodb":       "DDB",
+    "kms":            "KMS",
+    "iam":            "IAM",
+    "waf":            "WAF",
+    "sqs":            "SQS",
+    "sns":            "SNS",
+    "bedrock":        "Bedrock",
+    "cloudwatch":     "CW",
+}
+
+# Derived from RESOURCE_CATALOG — single source of truth for icon→colour mapping.
+_ICON_COLORS: dict[str, str] = {
+    entry.icon_key: GROUP_COLORS.get(entry.group, "#888888")
+    for entry in RESOURCE_CATALOG.values()
+    if entry.icon_key
 }
 
 
 def _make_icon_svg(icon_key: str) -> str:
-    abbrev, group = _ICON_META.get(icon_key, (icon_key[:4].upper(), "Other"))
-    color = GROUP_COLORS.get(group, "#888888")
+    abbrev = _ICON_ABBREVS.get(icon_key, icon_key[:4].upper())
+    color = _ICON_COLORS.get(icon_key, "#888888")
     font_size = 16 if len(abbrev) <= 3 else (11 if len(abbrev) <= 7 else 9)
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">'
@@ -158,8 +181,6 @@ def _svg_to_data_uri(svg_str: str) -> str:
 
 
 def _get_icon_uri(icon_key: str, icon_dir: Path | None) -> str:
-    if not icon_key:
-        return ""
     if icon_dir:
         candidate = icon_dir / f"{icon_key}.svg"
         if candidate.is_file():
@@ -169,19 +190,19 @@ def _get_icon_uri(icon_key: str, icon_dir: Path | None) -> str:
 
 # ── HCL parsing ───────────────────────────────────────────────────────────────
 
-def parse_tf_folder(folder: Path, verbose: bool = False) -> dict[str, dict]:
+def parse_tf_folder(folder: Path, verbose: bool = False) -> Registry:
     """
     Parse all .tf files in folder and return a flat resource registry.
-    Returns: { "resource_type.resource_name": clean_attrs_dict }
+    Returns: { "resource_type.resource_name": attrs_dict }
 
     data {} blocks are intentionally skipped — they are read-only lookups
     and do not represent deployable AWS resources.
     """
-    registry: dict[str, dict] = {}
     tf_files = sorted(folder.glob("*.tf"))
     if not tf_files:
-        return registry
+        return {}
 
+    registry: Registry = {}
     data_block_count = 0
     failed_files: list[str] = []
 
@@ -194,9 +215,8 @@ def parse_tf_folder(folder: Path, verbose: bool = False) -> dict[str, dict]:
             failed_files.append(tf_file.name)
             continue
 
-        # Count data blocks — intentionally not processed
-        for _ in parsed.get("data", []):
-            data_block_count += 1
+        # data blocks are intentionally not processed
+        data_block_count += len(parsed.get("data", []))
 
         for block in parsed.get("resource", []):
             for rtype, instances in block.items():
@@ -208,8 +228,7 @@ def parse_tf_folder(folder: Path, verbose: bool = False) -> dict[str, dict]:
                     rname_clean = rname.strip("\"'")
                     key = f"{rtype_clean}.{rname_clean}"
                     # Strip python-hcl2 v8 __is_block__ metadata before processing
-                    clean = {k: v for k, v in attrs.items() if not k.startswith("__")}
-                    registry[key] = clean
+                    registry[key] = {k: v for k, v in attrs.items() if not k.startswith("__")}
 
     if verbose:
         ok_count = len(tf_files) - len(failed_files)
@@ -230,14 +249,14 @@ def parse_tf_folder(folder: Path, verbose: bool = False) -> dict[str, dict]:
 
 # Matches ${resource_type.resource_name} and ${resource_type.resource_name.attr}
 # Capture group stops at resource_type.resource_name; trailing .attribute is consumed
-# by the non-capturing lookahead (?:[.\}]) so it is not included in the edge target.
+# by the non-capturing group (?:[.\}]) so it is not included in the edge target.
 _REF_RE = re.compile(r'\$\{([a-z][a-zA-Z0-9_]+\.[a-zA-Z0-9_\-]+)(?:[.\}])')
 # Bare references (Terraform 0.12+ HCL2 — python-hcl2 may or may not normalise these)
 _BARE_RE = re.compile(r'\b(aws_[a-zA-Z0-9_]+\.[a-zA-Z0-9_\-]+)\b')
 
 
 def extract_dependencies(
-    registry: dict[str, dict],
+    registry: Registry,
     show_support: bool,
     verbose: bool = False,
 ) -> list[tuple[str, str]]:
@@ -262,16 +281,12 @@ def extract_dependencies(
                 refs.add(cleaned)
 
         for ref in refs:
-            if ref == key:
-                continue  # drop self-loops
-            if ref in registry:
+            if ref != key and ref in registry:
                 edges.add((key, ref))
 
     edge_list = list(edges)
-
     if not show_support:
         edge_list = _collapse_support_edges(edge_list, registry, verbose)
-
     return edge_list
 
 
@@ -283,13 +298,12 @@ def _find_primary_type(rtype: str) -> str:
     """
     candidate = rtype
     while True:
-        # Only strip within the part after 'aws_' (position 4) to preserve the prefix
-        last_underscore = candidate.rfind("_", 4)
+        last_underscore = candidate.rfind("_", _AWS_PREFIX_LEN)
         if last_underscore == -1:
             return ""
         candidate = candidate[:last_underscore]
         entry = RESOURCE_CATALOG.get(candidate)
-        if entry and entry[1] != "Support":
+        if entry and entry.group != _SUPPORT_GROUP:
             return candidate
 
 
@@ -305,7 +319,7 @@ def _lcp_length(a: str, b: str) -> int:
 
 def _collapse_support_edges(
     edges: list[tuple[str, str]],
-    registry: dict[str, dict],
+    registry: Registry,
     verbose: bool,
 ) -> list[tuple[str, str]]:
     """
@@ -316,11 +330,8 @@ def _collapse_support_edges(
     result: list[tuple[str, str]] = []
 
     for src, dst in edges:
-        src_rtype = src.rsplit(".", 1)[0]
-        src_rname = src.rsplit(".", 1)[1]
-        src_group = RESOURCE_CATALOG.get(src_rtype, ("", "Other", ""))[1]
-
-        if src_group != "Support":
+        src_rtype, src_rname = src.rsplit(".", 1)
+        if RESOURCE_CATALOG.get(src_rtype, _DEFAULT_ENTRY).group != _SUPPORT_GROUP:
             result.append((src, dst))
             continue
 
@@ -330,12 +341,14 @@ def _collapse_support_edges(
                 print(f"  Dropped unresolvable support edge: {src} -> {dst}", file=sys.stderr)
             continue
 
-        # Collect primary registry entries of the parent type
+        # Collect primary registry entries of the parent type.
+        # startswith(parent_type + ".") guarantees an exact type match, so the
+        # support check on the candidate is redundant but kept for safety.
         candidates = [
             (k, k.rsplit(".", 1)[1])
             for k in registry
             if k.startswith(parent_type + ".")
-            and RESOURCE_CATALOG.get(k.rsplit(".", 1)[0], ("", "Support", ""))[1] != "Support"
+            and RESOURCE_CATALOG.get(k.rsplit(".", 1)[0], _DEFAULT_ENTRY).group != _SUPPORT_GROUP
         ]
 
         if not candidates:
@@ -350,10 +363,8 @@ def _collapse_support_edges(
             if lcp >= 3 and lcp > best_len:
                 best_key, best_len = cand_key, lcp
 
-        if best_key:
-            new_edge = (best_key, dst)
-            if new_edge[0] != new_edge[1]:
-                result.append(new_edge)
+        if best_key and best_key != dst:
+            result.append((best_key, dst))
         else:
             if verbose:
                 print(f"  Dropped unresolvable support edge: {src} -> {dst}", file=sys.stderr)
@@ -364,14 +375,14 @@ def _collapse_support_edges(
 # ── Graph construction ────────────────────────────────────────────────────────
 
 def build_graph(
-    registry: dict[str, dict],
+    registry: Registry,
     edges: list[tuple[str, str]],
     show_support: bool,
     icon_dir: Path | None,
-) -> tuple[Network, dict[str, list[str]]]:
+) -> tuple[Network, GroupNodes]:
     """
-    Build the pyvis Network. Returns (network, group_nodes_map) where
-    group_nodes_map maps group name → list of node IDs in that group.
+    Build the pyvis Network. Returns (network, group_nodes) where
+    group_nodes maps group name → list of node IDs in that group.
     """
     net = Network(
         height="870px",
@@ -407,20 +418,20 @@ def build_graph(
         },
     }))
 
-    group_nodes: dict[str, list[str]] = {}
+    group_nodes: GroupNodes = {}
 
     for key, attrs in registry.items():
         rtype, rname = key.rsplit(".", 1)
-        label, group, icon_key = RESOURCE_CATALOG.get(rtype, (rtype, "Other", ""))
+        entry = RESOURCE_CATALOG.get(rtype, _DEFAULT_ENTRY)
 
-        if not show_support and group == "Support":
+        if not show_support and entry.group == _SUPPORT_GROUP:
             continue
 
-        group_nodes.setdefault(group, []).append(key)
-        color = GROUP_COLORS.get(group, "#888888")
+        group_nodes.setdefault(entry.group, []).append(key)
+        color = GROUP_COLORS.get(entry.group, "#888888")
 
         # Build a concise hover tooltip
-        tooltip_lines = [f"<b>{key}</b>", f"Group: {group}"]
+        tooltip_lines = [f"<b>{key}</b>", f"Group: {entry.group}"]
         for attr_name in ("function_name", "name", "bucket", "table_name", "alarm_name"):
             val = attrs.get(attr_name)
             if val and isinstance(val, str) and not val.startswith("$"):
@@ -432,7 +443,7 @@ def build_graph(
             tooltip_lines.append(f"count: {attrs['count']}")
         tooltip = "<br>".join(tooltip_lines)
 
-        if group == "Support":
+        if entry.group == _SUPPORT_GROUP:
             net.add_node(
                 key,
                 label=rname,
@@ -440,33 +451,31 @@ def build_graph(
                 shape="dot",
                 size=8,
                 color={"background": "#555555", "border": "#777777"},
-                group=group,
+                group=entry.group,
+            )
+        elif entry.icon_key:
+            net.add_node(
+                key,
+                label=rname,
+                title=tooltip,
+                shape="image",
+                image=_get_icon_uri(entry.icon_key, icon_dir),
+                size=35,
+                group=entry.group,
+                font={"color": "white", "size": 11, "strokeWidth": 2, "strokeColor": "#1a1a2e"},
             )
         else:
-            icon_uri = _get_icon_uri(icon_key, icon_dir)
-            if icon_uri:
-                net.add_node(
-                    key,
-                    label=rname,
-                    title=tooltip,
-                    shape="image",
-                    image=icon_uri,
-                    size=35,
-                    group=group,
-                    font={"color": "white", "size": 11, "strokeWidth": 2, "strokeColor": "#1a1a2e"},
-                )
-            else:
-                # Fallback: plain coloured ellipse
-                net.add_node(
-                    key,
-                    label=rname,
-                    title=tooltip,
-                    shape="ellipse",
-                    size=25,
-                    color={"background": color, "border": color},
-                    group=group,
-                    font={"color": "white", "size": 11},
-                )
+            # "Other" group — no icon key defined in RESOURCE_CATALOG
+            net.add_node(
+                key,
+                label=rname,
+                title=tooltip,
+                shape="ellipse",
+                size=25,
+                color={"background": color, "border": color},
+                group=entry.group,
+                font={"color": "white", "size": 11},
+            )
 
     node_ids_in_graph = set(net.get_nodes())
     for src, dst in edges:
@@ -493,23 +502,19 @@ _INLINE_CSS = """\
 
 
 def _build_legend_html(
-    group_nodes: dict[str, list[str]],
+    group_nodes: GroupNodes,
     title: str,
     resource_count: int,
     edge_count: int,
 ) -> str:
-    swatches = []
-    for group in sorted(group_nodes):
-        color = GROUP_COLORS.get(group, "#888888")
-        count = len(group_nodes[group])
-        swatches.append(
-            f'<label class="grp-swatch">'
-            f'<input type="checkbox" class="grp-toggle" data-group="{group}" checked>'
-            f'<span class="swatch-dot" style="background:{color}"></span>'
-            f'<span>{group} ({count})</span>'
-            f'</label>'
-        )
-
+    swatches = [
+        f'<label class="grp-swatch">'
+        f'<input type="checkbox" class="grp-toggle" data-group="{group}" checked>'
+        f'<span class="swatch-dot" style="background:{GROUP_COLORS.get(group, "#888888")}"></span>'
+        f'<span>{group} ({len(group_nodes[group])})</span>'
+        f'</label>'
+        for group in sorted(group_nodes)
+    ]
     return (
         f'<div id="tf-arch-header">'
         f'<div id="tf-arch-title">{title}</div>'
@@ -522,8 +527,8 @@ def _build_legend_html(
     )
 
 
-def _build_toggle_script(group_nodes: dict[str, list[str]]) -> str:
-    group_map_json = json.dumps({g: ids for g, ids in group_nodes.items()})
+def _build_toggle_script(group_nodes: GroupNodes) -> str:
+    group_map_json = json.dumps(group_nodes)
     return f"""\
 <script>
 (function() {{
@@ -568,48 +573,62 @@ def _build_toggle_script(group_nodes: dict[str, list[str]]) -> str:
 </script>"""
 
 
+def _get_raw_html(net: Network) -> str:
+    # generate_html() confirmed present in pyvis 0.3.2; tempfile fallback
+    # retained for forward/backward compatibility with other 0.3.x releases.
+    if hasattr(net, "generate_html"):
+        return net.generate_html(local=False, notebook=False)
+    tmp = tempfile.NamedTemporaryFile(suffix=".html", delete=False)
+    tmp.close()
+    tmp_path = Path(tmp.name)
+    try:
+        net.write_html(str(tmp_path))
+        return tmp_path.read_text(encoding="utf-8")
+    finally:
+        tmp_path.unlink()
+
+
+def _strip_cdn_tags(html: str) -> str:
+    # pyvis injects Bootstrap from CDN even with cdn_resources='in_line' (issue #228).
+    html = re.sub(r'<link[^>]+href=["\']https://[^"\']*["\'][^>]*/?>', "", html)
+    html = re.sub(r'<script[^>]+src=["\']https://[^"\']*["\'][^>]*></script>', "", html)
+    return html
+
+
+def _inject_head(html: str) -> str:
+    return html.replace("<head>", "<head>\n" + _INLINE_CSS, 1)
+
+
+def _inject_legend(html: str, legend: str) -> str:
+    # String insertion rather than re.sub to avoid misinterpreting legend HTML
+    # as a regex replacement string (backslashes, ampersands, etc.).
+    body_match = re.search(r"<body[^>]*>", html)
+    if not body_match:
+        return html
+    pos = body_match.end()
+    return html[:pos] + "\n" + legend + html[pos:]
+
+
+def _inject_toggle_script(html: str, script: str) -> str:
+    return html.replace("</body>", script + "\n</body>", 1)
+
+
 def generate_html(
     net: Network,
-    group_nodes: dict[str, list[str]],
+    group_nodes: GroupNodes,
     title: str,
     output_path: Path,
     resource_count: int,
     edge_count: int,
 ) -> None:
-    # Obtain raw HTML — generate_html() confirmed present in pyvis 0.3.2;
-    # tempfile fallback retained for forward/backward compatibility.
-    if hasattr(net, "generate_html"):
-        html: str = net.generate_html(local=False, notebook=False)
-    else:
-        tmp = tempfile.NamedTemporaryFile(suffix=".html", delete=False)
-        tmp.close()
-        try:
-            net.write_html(tmp.name)
-            with open(tmp.name, "r", encoding="utf-8") as fh:
-                html = fh.read()
-        finally:
-            os.unlink(tmp.name)
-
-    # Strip any externally-hosted <link> and <script src="..."> tags.
-    # pyvis injects Bootstrap from CDN even with cdn_resources='in_line' (issue #228).
-    # Match both <link href="https://..."> and <script src="https://..."></script>.
-    html = re.sub(r'<link[^>]+href=["\']https://[^"\']*["\'][^>]*/?>', "", html)
-    html = re.sub(r'<script[^>]+src=["\']https://[^"\']*["\'][^>]*></script>', "", html)
-
-    # Inject meta charset + custom styles inside <head>
-    html = html.replace("<head>", "<head>\n" + _INLINE_CSS, 1)
-
-    # Inject legend header right after the opening <body> tag (string insertion,
-    # not re.sub, to avoid misinterpreting legend HTML as a regex replacement string)
-    body_match = re.search(r"<body[^>]*>", html)
-    if body_match:
-        insert_pos = body_match.end()
-        legend = _build_legend_html(group_nodes, title, resource_count, edge_count)
-        html = html[:insert_pos] + "\n" + legend + html[insert_pos:]
-
-    # Inject checkbox toggle script before </body>
+    legend = _build_legend_html(group_nodes, title, resource_count, edge_count)
     toggle = _build_toggle_script(group_nodes)
-    html = html.replace("</body>", toggle + "\n</body>", 1)
+
+    html = _get_raw_html(net)
+    html = _strip_cdn_tags(html)
+    html = _inject_head(html)
+    html = _inject_legend(html, legend)
+    html = _inject_toggle_script(html, toggle)
 
     output_path.write_text(html, encoding="utf-8")
 
