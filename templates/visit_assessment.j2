@@ -1,0 +1,30 @@
+VISIT ASSESSMENT SUMMARY
+========================
+
+Patient ID:   {{ patient_id }}
+Visit Date:   {{ visit_date }}
+Visit Type:   {{ visit_type | replace("_", " ") | title }}
+
+FUNCTIONAL STATUS
+-----------------
+{{ functional_status }}
+
+PAIN ASSESSMENT
+---------------
+{% if pain_score is not none %}
+Pain Score: {{ pain_score }}/10
+{% else %}
+Pain score not recorded.
+{% endif %}
+
+GOALS PROGRESS
+--------------
+{{ goals_progress }}
+
+BARRIERS
+--------
+{{ barriers if barriers else "No barriers documented." }}
+
+PLAN UPDATES
+------------
+{{ plan_updates }}

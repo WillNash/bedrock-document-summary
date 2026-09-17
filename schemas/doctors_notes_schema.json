@@ -1,0 +1,52 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DoctorsNotes",
+  "type": "object",
+  "required": ["patient_id", "visit_date", "provider", "chief_complaint", "history_of_present_illness", "physical_exam_findings", "assessment", "plan"],
+  "properties": {
+    "patient_id": {
+      "type": "string",
+      "description": "Patient identifier"
+    },
+    "visit_date": {
+      "type": "string",
+      "description": "Date of the clinical encounter"
+    },
+    "provider": {
+      "type": "string",
+      "description": "Name or identifier of the treating clinician"
+    },
+    "chief_complaint": {
+      "type": "string",
+      "description": "Primary reason for visit"
+    },
+    "history_of_present_illness": {
+      "type": "string",
+      "description": "Narrative description of the current illness or complaint"
+    },
+    "physical_exam_findings": {
+      "type": "string",
+      "description": "Objective findings from physical examination"
+    },
+    "assessment": {
+      "type": "string",
+      "description": "Diagnostic impressions or diagnoses"
+    },
+    "plan": {
+      "type": "string",
+      "description": "Treatment plan including orders, referrals, and instructions"
+    },
+    "medications_changed": {
+      "type": ["array", "null"],
+      "description": "Medications added, changed, or discontinued this visit. Null if no changes.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "follow_up": {
+      "type": ["string", "null"],
+      "description": "Follow-up instructions or timeline, or null if not specified"
+    }
+  },
+  "additionalProperties": false
+}

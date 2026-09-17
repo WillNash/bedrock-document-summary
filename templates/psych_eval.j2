@@ -1,0 +1,26 @@
+PSYCHIATRIC EVALUATION SUMMARY
+==============================
+
+Patient ID:  {{ patient_id }}
+Eval Date:   {{ eval_date }}
+Evaluator:   {{ evaluator }}
+
+PRESENTING CONCERNS
+-------------------
+{{ presenting_concerns }}
+
+MENTAL STATUS EXAMINATION
+--------------------------
+{{ mental_status_summary }}
+
+DIAGNOSTIC IMPRESSIONS
+-----------------------
+{{ diagnostic_impressions }}
+
+RISK ASSESSMENT
+---------------
+{{ risk_assessment if risk_assessment else "No formal risk assessment documented." }}
+
+RECOMMENDATIONS
+---------------
+{{ recommendations }}

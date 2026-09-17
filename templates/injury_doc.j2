@@ -1,0 +1,32 @@
+INJURY DOCUMENTATION SUMMARY
+=============================
+
+Patient ID:     {{ patient_id }}
+Incident Date:  {{ incident_date }}
+
+INCIDENT OVERVIEW
+-----------------
+Mechanism of Injury: {{ mechanism_of_injury }}
+Severity:            {{ severity | capitalize }}
+
+BODY REGIONS AFFECTED
+---------------------
+{% for region in body_regions_affected %}
+  - {{ region }}
+{% endfor %}
+
+IMAGING FINDINGS
+----------------
+{{ imaging_findings if imaging_findings else "No imaging performed or documented." }}
+
+TREATMENT PLAN
+--------------
+{{ treatment_plan }}
+
+WORK STATUS
+-----------
+{{ work_status if work_status else "Not documented." }}
+
+NOTES
+-----
+{{ notes if notes else "None." }}

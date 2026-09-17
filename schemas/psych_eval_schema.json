@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PsychEval",
+  "type": "object",
+  "required": ["patient_id", "eval_date", "evaluator", "presenting_concerns", "mental_status_summary", "diagnostic_impressions", "risk_assessment", "recommendations"],
+  "properties": {
+    "patient_id": {
+      "type": "string",
+      "description": "Patient identifier"
+    },
+    "eval_date": {
+      "type": "string",
+      "description": "Date of the evaluation"
+    },
+    "evaluator": {
+      "type": "string",
+      "description": "Name and credentials of the evaluating clinician"
+    },
+    "presenting_concerns": {
+      "type": "string",
+      "description": "Primary reasons for the evaluation as clinical prose"
+    },
+    "mental_status_summary": {
+      "type": "string",
+      "description": "Synthesized narrative of mental status examination findings"
+    },
+    "diagnostic_impressions": {
+      "type": "string",
+      "description": "Diagnostic conclusions or differential diagnoses in clinical language"
+    },
+    "risk_assessment": {
+      "type": ["string", "null"],
+      "description": "Assessment of suicidal ideation, self-harm risk, or other safety concerns. Null only if no risk section present."
+    },
+    "recommendations": {
+      "type": "string",
+      "description": "Treatment recommendations, referrals, and follow-up as clinical prose"
+    }
+  },
+  "additionalProperties": false
+}

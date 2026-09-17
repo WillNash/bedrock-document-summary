@@ -1,0 +1,23 @@
+LAB RESULT SUMMARY
+==================
+
+Patient ID:         {{ patient_id }}
+Test Date:          {{ test_date }}
+Ordering Provider:  {{ ordering_provider }}
+
+{% for panel in test_panels %}
+--- {{ panel.panel_name | upper }} ---
+
+{% for result in panel.results %}
+  {{ result.name }}: {{ result.value }}{% if result.unit %} {{ result.unit }}{% endif %}{% if result.flag %}  [{{ result.flag }}]{% endif %}
+  Reference Range: {{ result.reference_range if result.reference_range else "Not specified" }}
+{% endfor %}
+{% endfor %}
+
+INTERPRETATION
+--------------
+{{ interpretation if interpretation else "Not documented." }}
+
+NOTES
+-----
+{{ notes if notes else "None." }}

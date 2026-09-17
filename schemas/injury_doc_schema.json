@@ -1,0 +1,50 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "InjuryDoc",
+  "type": "object",
+  "required": ["patient_id", "incident_date", "body_regions_affected", "mechanism_of_injury", "severity", "treatment_plan"],
+  "properties": {
+    "patient_id": {
+      "type": "string",
+      "description": "Patient identifier"
+    },
+    "incident_date": {
+      "type": "string",
+      "description": "Date of the injury incident"
+    },
+    "body_regions_affected": {
+      "type": "array",
+      "description": "List of anatomical regions injured",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "mechanism_of_injury": {
+      "type": "string",
+      "description": "How the injury occurred"
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["minor", "moderate", "severe"],
+      "description": "Overall severity classification"
+    },
+    "imaging_findings": {
+      "type": ["string", "null"],
+      "description": "Radiological or imaging results, or null if none performed"
+    },
+    "treatment_plan": {
+      "type": "string",
+      "description": "Documented treatment approach and interventions"
+    },
+    "work_status": {
+      "type": ["string", "null"],
+      "description": "Work capacity and restrictions, or null if not addressed"
+    },
+    "notes": {
+      "type": ["string", "null"],
+      "description": "Any additional relevant notes"
+    }
+  },
+  "additionalProperties": false
+}

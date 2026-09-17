@@ -1,0 +1,44 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "VisitAssessment",
+  "type": "object",
+  "required": ["patient_id", "visit_date", "visit_type", "functional_status", "goals_progress", "plan_updates"],
+  "properties": {
+    "patient_id": {
+      "type": "string",
+      "description": "Patient identifier"
+    },
+    "visit_date": {
+      "type": "string",
+      "description": "Date of the visit or assessment"
+    },
+    "visit_type": {
+      "type": "string",
+      "enum": ["initial", "follow_up", "discharge", "telehealth"],
+      "description": "Type of visit"
+    },
+    "functional_status": {
+      "type": "string",
+      "description": "Documented functional abilities, limitations, or activity level"
+    },
+    "pain_score": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "maximum": 10,
+      "description": "Numeric pain rating 0-10, or null if not recorded"
+    },
+    "goals_progress": {
+      "type": "string",
+      "description": "Progress toward established treatment goals"
+    },
+    "barriers": {
+      "type": ["string", "null"],
+      "description": "Barriers to recovery or treatment compliance, or null if none documented"
+    },
+    "plan_updates": {
+      "type": "string",
+      "description": "Modifications to treatment plan or next steps"
+    }
+  },
+  "additionalProperties": false
+}

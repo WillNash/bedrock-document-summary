@@ -1,0 +1,73 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "LabResult",
+  "type": "object",
+  "required": ["patient_id", "test_date", "ordering_provider", "test_panels"],
+  "properties": {
+    "patient_id": {
+      "type": "string",
+      "description": "Patient identifier"
+    },
+    "test_date": {
+      "type": "string",
+      "description": "Date the specimen was collected or test was performed (ISO 8601 preferred)"
+    },
+    "ordering_provider": {
+      "type": "string",
+      "description": "Name or identifier of the ordering clinician"
+    },
+    "test_panels": {
+      "type": "array",
+      "description": "One or more test panels included in the report",
+      "items": {
+        "type": "object",
+        "required": ["panel_name", "results"],
+        "properties": {
+          "panel_name": {
+            "type": "string",
+            "description": "Name of the test panel (e.g., Complete Blood Count, Comprehensive Metabolic Panel)"
+          },
+          "results": {
+            "type": "array",
+            "description": "Individual test results within the panel",
+            "items": {
+              "type": "object",
+              "required": ["name", "value", "unit"],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Name of the test component"
+                },
+                "value": {
+                  "type": "string",
+                  "description": "Measured value as a string"
+                },
+                "unit": {
+                  "type": ["string", "null"],
+                  "description": "Unit of measurement"
+                },
+                "reference_range": {
+                  "type": ["string", "null"],
+                  "description": "Normal reference range as documented"
+                },
+                "flag": {
+                  "type": ["string", "null"],
+                  "description": "Abnormality flag (e.g., H, L, HIGH, LOW, CRITICAL) or null if within range"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "interpretation": {
+      "type": ["string", "null"],
+      "description": "Overall interpretation or pathologist/clinician comment"
+    },
+    "notes": {
+      "type": ["string", "null"],
+      "description": "Any additional notes or comments from the report"
+    }
+  },
+  "additionalProperties": false
+}

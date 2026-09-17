@@ -1,0 +1,40 @@
+CLINICAL NOTE SUMMARY
+=====================
+
+Patient ID:    {{ patient_id }}
+Visit Date:    {{ visit_date }}
+Provider:      {{ provider }}
+
+CHIEF COMPLAINT
+---------------
+{{ chief_complaint }}
+
+HISTORY OF PRESENT ILLNESS
+---------------------------
+{{ history_of_present_illness }}
+
+PHYSICAL EXAMINATION FINDINGS
+------------------------------
+{{ physical_exam_findings }}
+
+ASSESSMENT
+----------
+{{ assessment }}
+
+PLAN
+----
+{{ plan }}
+
+MEDICATION CHANGES
+------------------
+{% if medications_changed %}
+{% for med in medications_changed %}
+  - {{ med }}
+{% endfor %}
+{% else %}
+No medication changes this visit.
+{% endif %}
+
+FOLLOW-UP
+---------
+{{ follow_up if follow_up else "Not specified." }}

@@ -1,0 +1,11 @@
+*.tfvars
+!terraform.tfvars.example
+*.zip
+.terraform/
+.terraform.lock.hcl
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+infra/lambda_packages/
+lambda/lambda_layer_packages/
