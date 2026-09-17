@@ -96,9 +96,10 @@ class TestLabResultSchema:
         with pytest.raises(jsonschema.ValidationError):
             jsonschema.validate(doc, self.schema)
 
-    def test_empty_panels_array(self):
+    def test_empty_panels_array_rejected(self):
         doc = {**LAB_RESULT_VALID, 'test_panels': []}
-        jsonschema.validate(doc, self.schema)
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate(doc, self.schema)
 
     def test_null_interpretation_allowed(self):
         doc = {**LAB_RESULT_VALID, 'interpretation': None}

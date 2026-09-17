@@ -10,7 +10,8 @@
     },
     "visit_date": {
       "type": "string",
-      "description": "Date of the visit or assessment"
+      "format": "date",
+      "description": "Date of the visit or assessment (YYYY-MM-DD)"
     },
     "visit_type": {
       "type": "string",

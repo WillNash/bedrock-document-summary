@@ -20,6 +20,9 @@ TEMPLATE_FILES = {
     'psych_eval': 'psych_eval.j2',
 }
 
+# Autoescaping is intentionally disabled — all templates render plain text,
+# not HTML. If an HTML template is ever added, create a separate Environment
+# with autoescape=select_autoescape(['html']) rather than enabling it here.
 jinja_env = Environment(
     loader=FileSystemLoader(str(TEMPLATE_DIR)),
     autoescape=select_autoescape([]),

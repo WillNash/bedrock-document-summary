@@ -5,7 +5,6 @@ import os
 import uuid
 from datetime import datetime, timezone, timedelta
 
-import boto3.session
 from botocore.config import Config
 from botocore.exceptions import ClientError
 

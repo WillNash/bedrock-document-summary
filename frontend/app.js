@@ -16,6 +16,8 @@ let idToken = null;
 // ── PKCE helpers ─────────────────────────────────────────────────────────────
 
 function base64urlEncode(buf) {
+  // Spread is stack-allocated — safe for the small buffers used here (32 and 48 bytes).
+  // Do not call this with large buffers; use a chunked approach instead.
   return btoa(String.fromCharCode(...new Uint8Array(buf)))
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }

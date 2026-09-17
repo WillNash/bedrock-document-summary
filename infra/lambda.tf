@@ -44,7 +44,9 @@ data "archive_file" "classifier" {
   output_path = "${path.module}/lambda_packages/classifier.zip"
 }
 
-# Extractor and validator: bundle schemas/ alongside handler.py
+# Extractor and validator: bundle schemas/ alongside handler.py.
+# dynamic "source" iterates local.extraction_doc_types so adding a new doc
+# type here is automatic once the type is added to that set in bedrock.tf.
 data "archive_file" "extractor" {
   type        = "zip"
   output_path = "${path.module}/lambda_packages/extractor.zip"
@@ -53,25 +55,13 @@ data "archive_file" "extractor" {
     content  = file("${path.module}/../lambda/extractor/handler.py")
     filename = "handler.py"
   }
-  source {
-    content  = file("${path.module}/../schemas/lab_result_schema.json")
-    filename = "schemas/lab_result_schema.json"
-  }
-  source {
-    content  = file("${path.module}/../schemas/doctors_notes_schema.json")
-    filename = "schemas/doctors_notes_schema.json"
-  }
-  source {
-    content  = file("${path.module}/../schemas/injury_doc_schema.json")
-    filename = "schemas/injury_doc_schema.json"
-  }
-  source {
-    content  = file("${path.module}/../schemas/visit_assessment_schema.json")
-    filename = "schemas/visit_assessment_schema.json"
-  }
-  source {
-    content  = file("${path.module}/../schemas/psych_eval_schema.json")
-    filename = "schemas/psych_eval_schema.json"
+
+  dynamic "source" {
+    for_each = local.extraction_doc_types
+    content {
+      content  = file("${path.module}/../schemas/${source.value}_schema.json")
+      filename = "schemas/${source.value}_schema.json"
+    }
   }
 }
 
@@ -83,25 +73,13 @@ data "archive_file" "validator" {
     content  = file("${path.module}/../lambda/validator/handler.py")
     filename = "handler.py"
   }
-  source {
-    content  = file("${path.module}/../schemas/lab_result_schema.json")
-    filename = "schemas/lab_result_schema.json"
-  }
-  source {
-    content  = file("${path.module}/../schemas/doctors_notes_schema.json")
-    filename = "schemas/doctors_notes_schema.json"
-  }
-  source {
-    content  = file("${path.module}/../schemas/injury_doc_schema.json")
-    filename = "schemas/injury_doc_schema.json"
-  }
-  source {
-    content  = file("${path.module}/../schemas/visit_assessment_schema.json")
-    filename = "schemas/visit_assessment_schema.json"
-  }
-  source {
-    content  = file("${path.module}/../schemas/psych_eval_schema.json")
-    filename = "schemas/psych_eval_schema.json"
+
+  dynamic "source" {
+    for_each = local.extraction_doc_types
+    content {
+      content  = file("${path.module}/../schemas/${source.value}_schema.json")
+      filename = "schemas/${source.value}_schema.json"
+    }
   }
 }
 

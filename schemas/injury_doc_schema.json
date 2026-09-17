@@ -10,7 +10,8 @@
     },
     "incident_date": {
       "type": "string",
-      "description": "Date of the injury incident"
+      "format": "date",
+      "description": "Date of the injury incident (YYYY-MM-DD)"
     },
     "body_regions_affected": {
       "type": "array",

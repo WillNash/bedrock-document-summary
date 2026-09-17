@@ -10,7 +10,8 @@
     },
     "eval_date": {
       "type": "string",
-      "description": "Date of the evaluation"
+      "format": "date",
+      "description": "Date of the evaluation (YYYY-MM-DD)"
     },
     "evaluator": {
       "type": "string",

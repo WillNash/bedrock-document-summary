@@ -10,7 +10,8 @@
     },
     "test_date": {
       "type": "string",
-      "description": "Date the specimen was collected or test was performed (ISO 8601 preferred)"
+      "format": "date",
+      "description": "Date the specimen was collected or test was performed (YYYY-MM-DD)"
     },
     "ordering_provider": {
       "type": "string",
@@ -19,6 +20,7 @@
     "test_panels": {
       "type": "array",
       "description": "One or more test panels included in the report",
+      "minItems": 1,
       "items": {
         "type": "object",
         "required": ["panel_name", "results"],

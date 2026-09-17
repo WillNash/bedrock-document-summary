@@ -10,7 +10,8 @@
     },
     "visit_date": {
       "type": "string",
-      "description": "Date of the clinical encounter"
+      "format": "date",
+      "description": "Date of the clinical encounter (YYYY-MM-DD)"
     },
     "provider": {
       "type": "string",

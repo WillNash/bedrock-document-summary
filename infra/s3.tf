@@ -51,6 +51,9 @@ resource "aws_s3_bucket_versioning" "summaries" {
   }
 }
 
+# Frontend assets are always reproducible from source — versioning adds cost
+# without recovery benefit. Versioning is intentionally omitted for this bucket.
+
 resource "aws_s3_bucket_server_side_encryption_configuration" "uploads" {
   bucket = aws_s3_bucket.uploads.id
   rule {
@@ -70,6 +73,15 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "summaries" {
       kms_master_key_id = aws_kms_key.phi.arn
     }
     bucket_key_enabled = true
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "frontend" {
+  bucket = aws_s3_bucket.frontend.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
   }
 }
 
