@@ -68,34 +68,19 @@ resource "aws_bedrock_prompt" "classifier" {
   tags            = local.common_tags
 }
 
-resource "aws_bedrock_prompt" "lab_result" {
-  name = "${local.name_prefix}-lab-result"
-
-  variants {
-    name          = "default"
-    model_id      = var.bedrock_model_id
-    template_type = "TEXT"
-
-    inference_configuration {
-      text {
-        temperature = 0
-        max_tokens  = 4096
-      }
-    }
-
-    template_configuration {
-      text {
-        text = file("${path.module}/../prompts/lab_result_prompt.txt")
-      }
-    }
-  }
-
-  default_variant = "default"
-  tags            = local.common_tags
+locals {
+  extraction_doc_types = toset([
+    "lab_result",
+    "doctors_notes",
+    "injury_doc",
+    "visit_assessment",
+    "psych_eval",
+  ])
 }
 
-resource "aws_bedrock_prompt" "doctors_notes" {
-  name = "${local.name_prefix}-doctors-notes"
+resource "aws_bedrock_prompt" "extraction" {
+  for_each = local.extraction_doc_types
+  name     = "${local.name_prefix}-${replace(each.key, "_", "-")}"
 
   variants {
     name          = "default"
@@ -111,85 +96,7 @@ resource "aws_bedrock_prompt" "doctors_notes" {
 
     template_configuration {
       text {
-        text = file("${path.module}/../prompts/doctors_notes_prompt.txt")
-      }
-    }
-  }
-
-  default_variant = "default"
-  tags            = local.common_tags
-}
-
-resource "aws_bedrock_prompt" "injury_doc" {
-  name = "${local.name_prefix}-injury-doc"
-
-  variants {
-    name          = "default"
-    model_id      = var.bedrock_model_id
-    template_type = "TEXT"
-
-    inference_configuration {
-      text {
-        temperature = 0
-        max_tokens  = 4096
-      }
-    }
-
-    template_configuration {
-      text {
-        text = file("${path.module}/../prompts/injury_doc_prompt.txt")
-      }
-    }
-  }
-
-  default_variant = "default"
-  tags            = local.common_tags
-}
-
-resource "aws_bedrock_prompt" "visit_assessment" {
-  name = "${local.name_prefix}-visit-assessment"
-
-  variants {
-    name          = "default"
-    model_id      = var.bedrock_model_id
-    template_type = "TEXT"
-
-    inference_configuration {
-      text {
-        temperature = 0
-        max_tokens  = 4096
-      }
-    }
-
-    template_configuration {
-      text {
-        text = file("${path.module}/../prompts/visit_assessment_prompt.txt")
-      }
-    }
-  }
-
-  default_variant = "default"
-  tags            = local.common_tags
-}
-
-resource "aws_bedrock_prompt" "psych_eval" {
-  name = "${local.name_prefix}-psych-eval"
-
-  variants {
-    name          = "default"
-    model_id      = var.bedrock_model_id
-    template_type = "TEXT"
-
-    inference_configuration {
-      text {
-        temperature = 0
-        max_tokens  = 4096
-      }
-    }
-
-    template_configuration {
-      text {
-        text = file("${path.module}/../prompts/psych_eval_prompt.txt")
+        text = file("${path.module}/../prompts/${each.key}_prompt.txt")
       }
     }
   }
@@ -203,27 +110,8 @@ resource "aws_bedrock_prompt_version" "classifier" {
   description = "Initial classifier prompt version"
 }
 
-resource "aws_bedrock_prompt_version" "lab_result" {
-  prompt_arn  = aws_bedrock_prompt.lab_result.arn
-  description = "Initial lab result extraction prompt version"
-}
-
-resource "aws_bedrock_prompt_version" "doctors_notes" {
-  prompt_arn  = aws_bedrock_prompt.doctors_notes.arn
-  description = "Initial doctor's notes extraction prompt version"
-}
-
-resource "aws_bedrock_prompt_version" "injury_doc" {
-  prompt_arn  = aws_bedrock_prompt.injury_doc.arn
-  description = "Initial injury documentation extraction prompt version"
-}
-
-resource "aws_bedrock_prompt_version" "visit_assessment" {
-  prompt_arn  = aws_bedrock_prompt.visit_assessment.arn
-  description = "Initial visit assessment extraction prompt version"
-}
-
-resource "aws_bedrock_prompt_version" "psych_eval" {
-  prompt_arn  = aws_bedrock_prompt.psych_eval.arn
-  description = "Initial psych eval extraction prompt version"
+resource "aws_bedrock_prompt_version" "extraction" {
+  for_each    = local.extraction_doc_types
+  prompt_arn  = aws_bedrock_prompt.extraction[each.key].arn
+  description = "Initial ${each.key} extraction prompt version"
 }

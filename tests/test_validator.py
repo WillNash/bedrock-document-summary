@@ -1,23 +1,22 @@
 """Unit tests for the validator Lambda handler."""
 import sys
 from pathlib import Path
+from unittest import mock
 
+import jsonschema
 import pytest
 
-# Add the lambda/validator directory to sys.path so handler.py can find schemas/
 VALIDATOR_DIR = Path(__file__).parent.parent / 'lambda' / 'validator'
 SCHEMAS_DIR = Path(__file__).parent.parent / 'schemas'
-
 sys.path.insert(0, str(VALIDATOR_DIR))
 
-# Patch the SCHEMA_DIR before importing the handler
-import importlib
-import unittest.mock as mock
-
-# Monkey-patch the schema dir to point to the real schemas directory
 with mock.patch.dict('os.environ', {'JOBS_TABLE': 'test-jobs'}):
     import handler as validator_handler
-    validator_handler.SCHEMA_DIR = SCHEMAS_DIR
+
+
+@pytest.fixture(autouse=True)
+def patch_schema_dir(monkeypatch):
+    monkeypatch.setattr(validator_handler, 'SCHEMA_DIR', SCHEMAS_DIR)
 
 
 VALID_LAB_RESULT_EVENT = {
@@ -79,7 +78,6 @@ class TestValidatorLambdaHandler:
         del extracted['patient_id']
         event = {**event, 'extracted_data': extracted}
 
-        import jsonschema
         with pytest.raises(jsonschema.ValidationError):
             validator_handler.lambda_handler(event, None)
 
@@ -88,7 +86,6 @@ class TestValidatorLambdaHandler:
         extracted = {**event['extracted_data'], 'severity': 'extreme'}
         event = {**event, 'extracted_data': extracted}
 
-        import jsonschema
         with pytest.raises(jsonschema.ValidationError):
             validator_handler.lambda_handler(event, None)
 

@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
+from botocore.exceptions import ClientError
 
 CLASSIFIER_DIR = Path(__file__).parent.parent / 'lambda' / 'classifier'
 sys.path.insert(0, str(CLASSIFIER_DIR))
@@ -26,6 +27,8 @@ MOCK_PROMPT_RESPONSE = {
         }
     ]
 }
+
+import handler  # noqa: E402 — sys.path must be set first
 
 
 def make_converse_response(label):
@@ -59,15 +62,14 @@ class TestClassifierLabels:
         'psych_eval',
     ])
     def test_all_valid_labels_parsed(self, label):
-        with mock.patch('handler.bedrock_agent') as mock_agent, \
-             mock.patch('handler.bedrock_runtime') as mock_runtime, \
-             mock.patch('handler.s3_client') as mock_s3:
+        with mock.patch.object(handler, 'bedrock_agent') as mock_agent, \
+             mock.patch.object(handler, 'bedrock_runtime') as mock_runtime, \
+             mock.patch.object(handler, 's3_client') as mock_s3:
 
             mock_agent.get_prompt.return_value = MOCK_PROMPT_RESPONSE
             mock_runtime.converse.return_value = make_converse_response(label)
             mock_s3.get_object.return_value = make_s3_response()
 
-            import handler
             result = handler.lambda_handler(
                 {'job_id': 'job-1', 'bucket': 'test-bucket', 'key': 'uploads/job-1/doc.txt'},
                 None,
@@ -76,16 +78,16 @@ class TestClassifierLabels:
         assert result['doc_type'] == label
         assert result['job_id'] == 'job-1'
 
-    def test_label_stripped_and_lowercased(self):
-        with mock.patch('handler.bedrock_agent') as mock_agent, \
-             mock.patch('handler.bedrock_runtime') as mock_runtime, \
-             mock.patch('handler.s3_client') as mock_s3:
+    def test_unstripped_whitespace_label_rejected(self):
+        """Handler lowercases but does not strip — whitespace-padded labels are rejected."""
+        with mock.patch.object(handler, 'bedrock_agent') as mock_agent, \
+             mock.patch.object(handler, 'bedrock_runtime') as mock_runtime, \
+             mock.patch.object(handler, 's3_client') as mock_s3:
 
             mock_agent.get_prompt.return_value = MOCK_PROMPT_RESPONSE
             mock_runtime.converse.return_value = make_converse_response('  Lab_Result  ')
             mock_s3.get_object.return_value = make_s3_response()
 
-            import handler
             with pytest.raises(ValueError, match='unknown doc type'):
                 handler.lambda_handler(
                     {'job_id': 'job-1', 'bucket': 'b', 'key': 'uploads/job-1/doc.txt'},
@@ -95,15 +97,14 @@ class TestClassifierLabels:
 
 class TestClassifierErrorHandling:
     def test_unknown_label_raises_value_error(self):
-        with mock.patch('handler.bedrock_agent') as mock_agent, \
-             mock.patch('handler.bedrock_runtime') as mock_runtime, \
-             mock.patch('handler.s3_client') as mock_s3:
+        with mock.patch.object(handler, 'bedrock_agent') as mock_agent, \
+             mock.patch.object(handler, 'bedrock_runtime') as mock_runtime, \
+             mock.patch.object(handler, 's3_client') as mock_s3:
 
             mock_agent.get_prompt.return_value = MOCK_PROMPT_RESPONSE
             mock_runtime.converse.return_value = make_converse_response('financial_report')
             mock_s3.get_object.return_value = make_s3_response()
 
-            import handler
             with pytest.raises(ValueError, match='unknown doc type'):
                 handler.lambda_handler(
                     {'job_id': 'job-2', 'bucket': 'b', 'key': 'uploads/job-2/doc.txt'},
@@ -111,10 +112,9 @@ class TestClassifierErrorHandling:
                 )
 
     def test_bedrock_throttle_propagates(self):
-        from botocore.exceptions import ClientError
-        with mock.patch('handler.bedrock_agent') as mock_agent, \
-             mock.patch('handler.bedrock_runtime') as mock_runtime, \
-             mock.patch('handler.s3_client') as mock_s3:
+        with mock.patch.object(handler, 'bedrock_agent') as mock_agent, \
+             mock.patch.object(handler, 'bedrock_runtime') as mock_runtime, \
+             mock.patch.object(handler, 's3_client') as mock_s3:
 
             mock_agent.get_prompt.return_value = MOCK_PROMPT_RESPONSE
             mock_s3.get_object.return_value = make_s3_response()
@@ -123,7 +123,6 @@ class TestClassifierErrorHandling:
                 'Converse',
             )
 
-            import handler
             with pytest.raises(ClientError):
                 handler.lambda_handler(
                     {'job_id': 'job-3', 'bucket': 'b', 'key': 'uploads/job-3/doc.txt'},
@@ -131,13 +130,12 @@ class TestClassifierErrorHandling:
                 )
 
     def test_empty_prompt_variants_raises(self):
-        with mock.patch('handler.bedrock_agent') as mock_agent, \
-             mock.patch('handler.s3_client') as mock_s3:
+        with mock.patch.object(handler, 'bedrock_agent') as mock_agent, \
+             mock.patch.object(handler, 's3_client') as mock_s3:
 
             mock_agent.get_prompt.return_value = {'variants': []}
             mock_s3.get_object.return_value = make_s3_response()
 
-            import handler
             with pytest.raises(ValueError, match='No variants'):
                 handler.lambda_handler(
                     {'job_id': 'job-4', 'bucket': 'b', 'key': 'uploads/job-4/doc.txt'},
@@ -147,15 +145,14 @@ class TestClassifierErrorHandling:
 
 class TestClassifierPromptRetrieval:
     def test_get_prompt_called_with_arn_and_version(self):
-        with mock.patch('handler.bedrock_agent') as mock_agent, \
-             mock.patch('handler.bedrock_runtime') as mock_runtime, \
-             mock.patch('handler.s3_client') as mock_s3:
+        with mock.patch.object(handler, 'bedrock_agent') as mock_agent, \
+             mock.patch.object(handler, 'bedrock_runtime') as mock_runtime, \
+             mock.patch.object(handler, 's3_client') as mock_s3:
 
             mock_agent.get_prompt.return_value = MOCK_PROMPT_RESPONSE
             mock_runtime.converse.return_value = make_converse_response('lab_result')
             mock_s3.get_object.return_value = make_s3_response()
 
-            import handler
             handler.lambda_handler(
                 {'job_id': 'job-5', 'bucket': 'b', 'key': 'uploads/job-5/doc.txt'},
                 None,

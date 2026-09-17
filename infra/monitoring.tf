@@ -4,7 +4,11 @@ variable "alert_email" {
   default     = ""
 }
 
-# ── Pipeline failure alarm ───────────────────────────────────────────────────
+locals {
+  alert_actions = length(var.alert_email) > 0 ? [aws_sns_topic.alerts[0].arn] : []
+}
+
+# ── Pipeline failure alarms ───────────────────────────────────────────────────
 
 resource "aws_cloudwatch_metric_alarm" "sfn_failures" {
   alarm_name          = "${local.name_prefix}-pipeline-failures"
@@ -22,7 +26,8 @@ resource "aws_cloudwatch_metric_alarm" "sfn_failures" {
     StateMachineArn = aws_sfn_state_machine.pipeline.arn
   }
 
-  alarm_actions = length(var.alert_email) > 0 ? [aws_sns_topic.alerts[0].arn] : []
+  alarm_actions = local.alert_actions
+  ok_actions    = local.alert_actions
 
   tags = local.common_tags
 }
@@ -43,7 +48,8 @@ resource "aws_cloudwatch_metric_alarm" "sfn_throttled" {
     StateMachineArn = aws_sfn_state_machine.pipeline.arn
   }
 
-  alarm_actions = length(var.alert_email) > 0 ? [aws_sns_topic.alerts[0].arn] : []
+  alarm_actions = local.alert_actions
+  ok_actions    = local.alert_actions
 
   tags = local.common_tags
 }
@@ -58,7 +64,8 @@ resource "aws_cloudwatch_metric_alarm" "pipeline_starter_dlq" {
   metric_name         = "ApproximateNumberOfMessagesVisible"
   namespace           = "AWS/SQS"
   period              = 60
-  statistic           = "Sum"
+  # Maximum is correct for a gauge metric — Sum would misrepresent a single stuck message
+  statistic          = "Maximum"
   threshold           = 0
   treat_missing_data  = "notBreaching"
 
@@ -66,12 +73,13 @@ resource "aws_cloudwatch_metric_alarm" "pipeline_starter_dlq" {
     QueueName = aws_sqs_queue.pipeline_starter_dlq.name
   }
 
-  alarm_actions = length(var.alert_email) > 0 ? [aws_sns_topic.alerts[0].arn] : []
+  alarm_actions = local.alert_actions
+  ok_actions    = local.alert_actions
 
   tags = local.common_tags
 }
 
-# ── Lambda error alarms ──────────────────────────────────────────────────────
+# ── Lambda error alarms ───────────────────────────────────────────────────────
 
 resource "aws_cloudwatch_metric_alarm" "api_presign_errors" {
   alarm_name          = "${local.name_prefix}-api-presign-errors"
@@ -89,7 +97,52 @@ resource "aws_cloudwatch_metric_alarm" "api_presign_errors" {
     FunctionName = aws_lambda_function.api_presign.function_name
   }
 
-  alarm_actions = length(var.alert_email) > 0 ? [aws_sns_topic.alerts[0].arn] : []
+  alarm_actions = local.alert_actions
+  ok_actions    = local.alert_actions
+
+  tags = local.common_tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "classifier_errors" {
+  alarm_name          = "${local.name_prefix}-classifier-errors"
+  alarm_description   = "classifier Lambda errors — SFN retries may mask sustained Bedrock failures"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "Errors"
+  namespace           = "AWS/Lambda"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 5
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.classifier.function_name
+  }
+
+  alarm_actions = local.alert_actions
+  ok_actions    = local.alert_actions
+
+  tags = local.common_tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "extractor_errors" {
+  alarm_name          = "${local.name_prefix}-extractor-errors"
+  alarm_description   = "extractor Lambda errors — SFN retries may mask sustained Bedrock failures"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "Errors"
+  namespace           = "AWS/Lambda"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 5
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.extractor.function_name
+  }
+
+  alarm_actions = local.alert_actions
+  ok_actions    = local.alert_actions
 
   tags = local.common_tags
 }

@@ -49,6 +49,8 @@ EXTRACTED_LAB_RESULT = {
     'notes': None,
 }
 
+import handler  # noqa: E402 — sys.path must be set first
+
 
 def make_tool_use_response(tool_input):
     return {
@@ -81,23 +83,20 @@ def patch_env(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def patch_schema_dir():
-    import handler
-    handler.SCHEMA_DIR = SCHEMAS_DIR
-    yield
+def patch_schema_dir(monkeypatch):
+    monkeypatch.setattr(handler, 'SCHEMA_DIR', SCHEMAS_DIR)
 
 
 class TestExtractorToolUseRequest:
     def test_tool_choice_is_forced(self):
-        with mock.patch('handler.bedrock_agent') as mock_agent, \
-             mock.patch('handler.bedrock_runtime') as mock_runtime, \
-             mock.patch('handler.s3_client') as mock_s3:
+        with mock.patch.object(handler, 'bedrock_agent') as mock_agent, \
+             mock.patch.object(handler, 'bedrock_runtime') as mock_runtime, \
+             mock.patch.object(handler, 's3_client') as mock_s3:
 
             mock_agent.get_prompt.return_value = MOCK_PROMPT_RESPONSE
             mock_runtime.converse.return_value = make_tool_use_response(EXTRACTED_LAB_RESULT)
             mock_s3.get_object.return_value = make_s3_response()
 
-            import handler
             handler.lambda_handler(
                 {'job_id': 'j1', 'bucket': 'b', 'key': 'uploads/j1/doc.txt',
                  'doc_type': 'lab_result'},
@@ -108,15 +107,14 @@ class TestExtractorToolUseRequest:
             assert call_kwargs['toolConfig']['toolChoice'] == {'tool': {'name': 'extract_document'}}
 
     def test_tool_schema_matches_doc_type(self):
-        with mock.patch('handler.bedrock_agent') as mock_agent, \
-             mock.patch('handler.bedrock_runtime') as mock_runtime, \
-             mock.patch('handler.s3_client') as mock_s3:
+        with mock.patch.object(handler, 'bedrock_agent') as mock_agent, \
+             mock.patch.object(handler, 'bedrock_runtime') as mock_runtime, \
+             mock.patch.object(handler, 's3_client') as mock_s3:
 
             mock_agent.get_prompt.return_value = MOCK_PROMPT_RESPONSE
             mock_runtime.converse.return_value = make_tool_use_response(EXTRACTED_LAB_RESULT)
             mock_s3.get_object.return_value = make_s3_response()
 
-            import handler
             handler.lambda_handler(
                 {'job_id': 'j2', 'bucket': 'b', 'key': 'uploads/j2/doc.txt',
                  'doc_type': 'lab_result'},
@@ -141,15 +139,14 @@ class TestExtractorToolUseRequest:
                      'mental_status_summary': 'Normal', 'diagnostic_impressions': 'None',
                      'risk_assessment': None, 'recommendations': 'Follow up'}
 
-        with mock.patch('handler.bedrock_agent') as mock_agent, \
-             mock.patch('handler.bedrock_runtime') as mock_runtime, \
-             mock.patch('handler.s3_client') as mock_s3:
+        with mock.patch.object(handler, 'bedrock_agent') as mock_agent, \
+             mock.patch.object(handler, 'bedrock_runtime') as mock_runtime, \
+             mock.patch.object(handler, 's3_client') as mock_s3:
 
             mock_agent.get_prompt.return_value = MOCK_PROMPT_RESPONSE
             mock_runtime.converse.return_value = make_tool_use_response(extracted)
             mock_s3.get_object.return_value = make_s3_response()
 
-            import handler
             handler.lambda_handler(
                 {'job_id': 'jx', 'bucket': 'b', 'key': f'uploads/jx/doc.txt',
                  'doc_type': doc_type},
@@ -163,15 +160,14 @@ class TestExtractorToolUseRequest:
 
 class TestExtractorResponseParsing:
     def test_extracts_tool_use_input(self):
-        with mock.patch('handler.bedrock_agent') as mock_agent, \
-             mock.patch('handler.bedrock_runtime') as mock_runtime, \
-             mock.patch('handler.s3_client') as mock_s3:
+        with mock.patch.object(handler, 'bedrock_agent') as mock_agent, \
+             mock.patch.object(handler, 'bedrock_runtime') as mock_runtime, \
+             mock.patch.object(handler, 's3_client') as mock_s3:
 
             mock_agent.get_prompt.return_value = MOCK_PROMPT_RESPONSE
             mock_runtime.converse.return_value = make_tool_use_response(EXTRACTED_LAB_RESULT)
             mock_s3.get_object.return_value = make_s3_response()
 
-            import handler
             result = handler.lambda_handler(
                 {'job_id': 'j3', 'bucket': 'b', 'key': 'uploads/j3/doc.txt',
                  'doc_type': 'lab_result'},
@@ -189,15 +185,14 @@ class TestExtractorResponseParsing:
             }
         }
 
-        with mock.patch('handler.bedrock_agent') as mock_agent, \
-             mock.patch('handler.bedrock_runtime') as mock_runtime, \
-             mock.patch('handler.s3_client') as mock_s3:
+        with mock.patch.object(handler, 'bedrock_agent') as mock_agent, \
+             mock.patch.object(handler, 'bedrock_runtime') as mock_runtime, \
+             mock.patch.object(handler, 's3_client') as mock_s3:
 
             mock_agent.get_prompt.return_value = MOCK_PROMPT_RESPONSE
             mock_runtime.converse.return_value = bad_response
             mock_s3.get_object.return_value = make_s3_response()
 
-            import handler
             with pytest.raises(ValueError, match='toolUse block'):
                 handler.lambda_handler(
                     {'job_id': 'j4', 'bucket': 'b', 'key': 'uploads/j4/doc.txt',
@@ -208,15 +203,14 @@ class TestExtractorResponseParsing:
 
 class TestExtractorPromptRetrieval:
     def test_get_prompt_called_with_correct_arn_and_version(self):
-        with mock.patch('handler.bedrock_agent') as mock_agent, \
-             mock.patch('handler.bedrock_runtime') as mock_runtime, \
-             mock.patch('handler.s3_client') as mock_s3:
+        with mock.patch.object(handler, 'bedrock_agent') as mock_agent, \
+             mock.patch.object(handler, 'bedrock_runtime') as mock_runtime, \
+             mock.patch.object(handler, 's3_client') as mock_s3:
 
             mock_agent.get_prompt.return_value = MOCK_PROMPT_RESPONSE
             mock_runtime.converse.return_value = make_tool_use_response(EXTRACTED_LAB_RESULT)
             mock_s3.get_object.return_value = make_s3_response()
 
-            import handler
             handler.lambda_handler(
                 {'job_id': 'j5', 'bucket': 'b', 'key': 'uploads/j5/doc.txt',
                  'doc_type': 'lab_result'},

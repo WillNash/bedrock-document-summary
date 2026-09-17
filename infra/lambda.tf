@@ -326,20 +326,8 @@ resource "aws_lambda_function" "extractor" {
       BEDROCK_MODEL_ID    = var.bedrock_model_id
       GUARDRAIL_ID        = aws_bedrock_guardrail.main.guardrail_id
       GUARDRAIL_VERSION   = aws_bedrock_guardrail_version.main.version
-      PROMPT_ARNS_JSON = jsonencode({
-        lab_result       = aws_bedrock_prompt.lab_result.arn
-        doctors_notes    = aws_bedrock_prompt.doctors_notes.arn
-        injury_doc       = aws_bedrock_prompt.injury_doc.arn
-        visit_assessment = aws_bedrock_prompt.visit_assessment.arn
-        psych_eval       = aws_bedrock_prompt.psych_eval.arn
-      })
-      PROMPT_VERSIONS_JSON = jsonencode({
-        lab_result       = aws_bedrock_prompt_version.lab_result.version
-        doctors_notes    = aws_bedrock_prompt_version.doctors_notes.version
-        injury_doc       = aws_bedrock_prompt_version.injury_doc.version
-        visit_assessment = aws_bedrock_prompt_version.visit_assessment.version
-        psych_eval       = aws_bedrock_prompt_version.psych_eval.version
-      })
+      PROMPT_ARNS_JSON     = jsonencode({ for k in local.extraction_doc_types : k => aws_bedrock_prompt.extraction[k].arn })
+      PROMPT_VERSIONS_JSON = jsonencode({ for k in local.extraction_doc_types : k => aws_bedrock_prompt_version.extraction[k].version })
     }
   }
 

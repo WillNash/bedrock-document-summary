@@ -207,7 +207,12 @@ resource "aws_iam_role_policy" "processing_logs" {
         "logs:CreateLogStream",
         "logs:PutLogEvents",
       ]
-      Resource = "arn:aws:logs:*:${local.account_id}:log-group:/aws/lambda/${local.name_prefix}-*:*"
+      Resource = [
+        "arn:aws:logs:*:${local.account_id}:log-group:/aws/lambda/${local.name_prefix}-classifier:*",
+        "arn:aws:logs:*:${local.account_id}:log-group:/aws/lambda/${local.name_prefix}-extractor:*",
+        "arn:aws:logs:*:${local.account_id}:log-group:/aws/lambda/${local.name_prefix}-validator:*",
+        "arn:aws:logs:*:${local.account_id}:log-group:/aws/lambda/${local.name_prefix}-renderer:*",
+      ]
     }]
   })
 }
@@ -255,7 +260,7 @@ resource "aws_iam_role_policy" "processing_bedrock_runtime" {
     Version = "2012-10-17"
     Statement = [{
       Effect   = "Allow"
-      Action   = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
+      Action   = ["bedrock:InvokeModel"]
       Resource = "*"
     }]
   })
@@ -270,14 +275,10 @@ resource "aws_iam_role_policy" "processing_bedrock_prompt" {
     Statement = [{
       Effect = "Allow"
       Action = ["bedrock:GetPrompt"]
-      Resource = [
+      Resource = flatten([
         aws_bedrock_prompt.classifier.arn,
-        aws_bedrock_prompt.lab_result.arn,
-        aws_bedrock_prompt.doctors_notes.arn,
-        aws_bedrock_prompt.injury_doc.arn,
-        aws_bedrock_prompt.visit_assessment.arn,
-        aws_bedrock_prompt.psych_eval.arn,
-      ]
+        [for k in local.extraction_doc_types : aws_bedrock_prompt.extraction[k].arn],
+      ])
     }]
   })
 }
