@@ -3,6 +3,8 @@ import json
 import logging
 import os
 
+from botocore.exceptions import ClientError
+
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
@@ -31,11 +33,18 @@ def lambda_handler(event, context):
             'key': key,
         })
 
-        sfn_client.start_execution(
-            stateMachineArn=state_machine_arn,
-            name=job_id,
-            input=execution_input,
-        )
+        try:
+            sfn_client.start_execution(
+                stateMachineArn=state_machine_arn,
+                name=job_id,
+                input=execution_input,
+            )
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'ExecutionAlreadyExists':
+                # S3 event retry — execution is already running, nothing to do
+                logger.info({'job_id': job_id, 'action': 'execution_already_exists'})
+                continue
+            raise
 
         table = dynamodb.Table(jobs_table)
         table.update_item(

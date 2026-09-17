@@ -54,6 +54,8 @@ resource "aws_cloudfront_distribution" "frontend" {
     }
   }
 
+  web_acl_id = aws_wafv2_web_acl.cloudfront.arn
+
   viewer_certificate {
     cloudfront_default_certificate = true
   }

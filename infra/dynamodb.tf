@@ -33,7 +33,8 @@ resource "aws_dynamodb_table" "jobs" {
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = aws_kms_key.phi.arn
   }
 
   tags = local.common_tags

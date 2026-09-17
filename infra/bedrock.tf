@@ -21,10 +21,6 @@ resource "aws_bedrock_guardrail" "main" {
       action = "ANONYMIZE"
     }
     pii_entities_config {
-      type   = "DATE_TIME"
-      action = "ANONYMIZE"
-    }
-    pii_entities_config {
       type   = "US_SSN"
       action = "ANONYMIZE"
     }

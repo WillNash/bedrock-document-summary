@@ -55,8 +55,10 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "uploads" {
   bucket = aws_s3_bucket.uploads.id
   rule {
     apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = aws_kms_key.phi.arn
     }
+    bucket_key_enabled = true
   }
 }
 
@@ -64,8 +66,10 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "summaries" {
   bucket = aws_s3_bucket.summaries.id
   rule {
     apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = aws_kms_key.phi.arn
     }
+    bucket_key_enabled = true
   }
 }
 
@@ -103,7 +107,7 @@ resource "aws_s3_bucket_cors_configuration" "uploads" {
   cors_rule {
     allowed_headers = ["*"]
     allowed_methods = ["POST", "PUT"]
-    allowed_origins = ["*"]
+    allowed_origins = ["https://${aws_cloudfront_distribution.frontend.domain_name}"]
     expose_headers  = []
     max_age_seconds = 3000
   }

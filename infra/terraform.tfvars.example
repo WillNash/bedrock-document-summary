@@ -39,6 +39,9 @@ cognito_logout_urls   = ["http://localhost:3000"]
 log_retention_days    = 30
 upload_max_size_bytes = 10485760  # 10 MB
 
+# Optional: set to receive CloudWatch alarm notifications and cost anomaly alerts
+# alert_email = "ops@example.com"
+
 tags = {
   Team = "engineering"
 }

@@ -1,10 +1,11 @@
 # Lambda layer for shared Python dependencies (jinja2, jsonschema).
 # Run scripts/build_lambdas.sh before terraform apply to create this file.
 resource "aws_lambda_layer_version" "deps" {
-  filename            = "${path.module}/lambda_packages/layer.zip"
-  layer_name          = "${local.name_prefix}-deps"
-  compatible_runtimes = ["python3.12"]
-  description         = "jinja2 and jsonschema for renderer and validator Lambdas"
+  filename                 = "${path.module}/lambda_packages/layer.zip"
+  layer_name               = "${local.name_prefix}-deps"
+  compatible_runtimes      = ["python3.12"]
+  compatible_architectures = ["arm64"]
+  description              = "jinja2 and jsonschema for renderer and validator Lambdas"
 
   lifecycle {
     create_before_destroy = true
@@ -149,7 +150,8 @@ resource "aws_lambda_function" "api_presign" {
   source_code_hash = data.archive_file.api_presign.output_base64sha256
   handler          = "handler.lambda_handler"
   runtime          = "python3.12"
-  role             = aws_iam_role.lambda.arn
+  architectures    = ["arm64"]
+  role             = aws_iam_role.api.arn
   timeout          = 30
   memory_size      = 256
 
@@ -159,6 +161,10 @@ resource "aws_lambda_function" "api_presign" {
       JOBS_TABLE            = aws_dynamodb_table.jobs.name
       UPLOAD_MAX_SIZE_BYTES = tostring(var.upload_max_size_bytes)
     }
+  }
+
+  tracing_config {
+    mode = "Active"
   }
 
   logging_config {
@@ -177,7 +183,8 @@ resource "aws_lambda_function" "api_status" {
   source_code_hash = data.archive_file.api_status.output_base64sha256
   handler          = "handler.lambda_handler"
   runtime          = "python3.12"
-  role             = aws_iam_role.lambda.arn
+  architectures    = ["arm64"]
+  role             = aws_iam_role.api.arn
   timeout          = 10
   memory_size      = 128
 
@@ -185,6 +192,10 @@ resource "aws_lambda_function" "api_status" {
     variables = {
       JOBS_TABLE = aws_dynamodb_table.jobs.name
     }
+  }
+
+  tracing_config {
+    mode = "Active"
   }
 
   logging_config {
@@ -203,7 +214,8 @@ resource "aws_lambda_function" "api_summary" {
   source_code_hash = data.archive_file.api_summary.output_base64sha256
   handler          = "handler.lambda_handler"
   runtime          = "python3.12"
-  role             = aws_iam_role.lambda.arn
+  architectures    = ["arm64"]
+  role             = aws_iam_role.api.arn
   timeout          = 15
   memory_size      = 128
 
@@ -212,6 +224,10 @@ resource "aws_lambda_function" "api_summary" {
       JOBS_TABLE       = aws_dynamodb_table.jobs.name
       SUMMARIES_BUCKET = aws_s3_bucket.summaries.bucket
     }
+  }
+
+  tracing_config {
+    mode = "Active"
   }
 
   logging_config {
@@ -230,7 +246,8 @@ resource "aws_lambda_function" "pipeline_starter" {
   source_code_hash = data.archive_file.pipeline_starter.output_base64sha256
   handler          = "handler.lambda_handler"
   runtime          = "python3.12"
-  role             = aws_iam_role.lambda.arn
+  architectures    = ["arm64"]
+  role             = aws_iam_role.pipeline_starter.arn
   timeout          = 30
   memory_size      = 128
 
@@ -239,6 +256,10 @@ resource "aws_lambda_function" "pipeline_starter" {
       STATE_MACHINE_ARN = aws_sfn_state_machine.pipeline.arn
       JOBS_TABLE        = aws_dynamodb_table.jobs.name
     }
+  }
+
+  tracing_config {
+    mode = "Active"
   }
 
   logging_config {
@@ -257,7 +278,8 @@ resource "aws_lambda_function" "classifier" {
   source_code_hash = data.archive_file.classifier.output_base64sha256
   handler          = "handler.lambda_handler"
   runtime          = "python3.12"
-  role             = aws_iam_role.lambda.arn
+  architectures    = ["arm64"]
+  role             = aws_iam_role.processing.arn
   timeout          = 60
   memory_size      = 512
 
@@ -269,6 +291,10 @@ resource "aws_lambda_function" "classifier" {
       GUARDRAIL_ID                = aws_bedrock_guardrail.main.guardrail_id
       GUARDRAIL_VERSION           = aws_bedrock_guardrail_version.main.version
     }
+  }
+
+  tracing_config {
+    mode = "Active"
   }
 
   logging_config {
@@ -287,7 +313,8 @@ resource "aws_lambda_function" "extractor" {
   source_code_hash = data.archive_file.extractor.output_base64sha256
   handler          = "handler.lambda_handler"
   runtime          = "python3.12"
-  role             = aws_iam_role.lambda.arn
+  architectures    = ["arm64"]
+  role             = aws_iam_role.processing.arn
   timeout          = 120
   memory_size      = 512
 
@@ -313,6 +340,10 @@ resource "aws_lambda_function" "extractor" {
     }
   }
 
+  tracing_config {
+    mode = "Active"
+  }
+
   logging_config {
     log_format = "JSON"
     log_group  = aws_cloudwatch_log_group.lambda["extractor"].name
@@ -329,7 +360,8 @@ resource "aws_lambda_function" "validator" {
   source_code_hash = data.archive_file.validator.output_base64sha256
   handler          = "handler.lambda_handler"
   runtime          = "python3.12"
-  role             = aws_iam_role.lambda.arn
+  architectures    = ["arm64"]
+  role             = aws_iam_role.processing.arn
   timeout          = 30
   memory_size      = 256
   layers           = [aws_lambda_layer_version.deps.arn]
@@ -338,6 +370,10 @@ resource "aws_lambda_function" "validator" {
     variables = {
       JOBS_TABLE = aws_dynamodb_table.jobs.name
     }
+  }
+
+  tracing_config {
+    mode = "Active"
   }
 
   logging_config {
@@ -356,7 +392,8 @@ resource "aws_lambda_function" "renderer" {
   source_code_hash = data.archive_file.renderer.output_base64sha256
   handler          = "handler.lambda_handler"
   runtime          = "python3.12"
-  role             = aws_iam_role.lambda.arn
+  architectures    = ["arm64"]
+  role             = aws_iam_role.processing.arn
   timeout          = 30
   memory_size      = 256
   layers           = [aws_lambda_layer_version.deps.arn]
@@ -366,6 +403,10 @@ resource "aws_lambda_function" "renderer" {
       SUMMARIES_BUCKET = aws_s3_bucket.summaries.bucket
       JOBS_TABLE       = aws_dynamodb_table.jobs.name
     }
+  }
+
+  tracing_config {
+    mode = "Active"
   }
 
   logging_config {
@@ -384,7 +425,8 @@ resource "aws_lambda_function" "fail_handler" {
   source_code_hash = data.archive_file.fail_handler.output_base64sha256
   handler          = "handler.lambda_handler"
   runtime          = "python3.12"
-  role             = aws_iam_role.lambda.arn
+  architectures    = ["arm64"]
+  role             = aws_iam_role.fail_handler.arn
   timeout          = 15
   memory_size      = 128
 
@@ -392,6 +434,10 @@ resource "aws_lambda_function" "fail_handler" {
     variables = {
       JOBS_TABLE = aws_dynamodb_table.jobs.name
     }
+  }
+
+  tracing_config {
+    mode = "Active"
   }
 
   logging_config {
