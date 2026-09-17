@@ -160,6 +160,7 @@ resource "aws_lambda_function" "api_presign" {
       UPLOAD_BUCKET         = aws_s3_bucket.uploads.bucket
       JOBS_TABLE            = aws_dynamodb_table.jobs.name
       UPLOAD_MAX_SIZE_BYTES = tostring(var.upload_max_size_bytes)
+      DAILY_UPLOAD_LIMIT    = tostring(var.daily_upload_limit)
     }
   }
 
@@ -273,15 +274,16 @@ resource "aws_lambda_function" "pipeline_starter" {
 }
 
 resource "aws_lambda_function" "classifier" {
-  function_name    = "${local.name_prefix}-classifier"
-  filename         = data.archive_file.classifier.output_path
-  source_code_hash = data.archive_file.classifier.output_base64sha256
-  handler          = "handler.lambda_handler"
-  runtime          = "python3.12"
-  architectures    = ["arm64"]
-  role             = aws_iam_role.processing.arn
-  timeout          = 60
-  memory_size      = 512
+  function_name                  = "${local.name_prefix}-classifier"
+  filename                       = data.archive_file.classifier.output_path
+  source_code_hash               = data.archive_file.classifier.output_base64sha256
+  handler                        = "handler.lambda_handler"
+  runtime                        = "python3.12"
+  architectures                  = ["arm64"]
+  role                           = aws_iam_role.processing.arn
+  timeout                        = 60
+  memory_size                    = 512
+  reserved_concurrent_executions = var.processing_concurrency
 
   environment {
     variables = {
@@ -308,15 +310,16 @@ resource "aws_lambda_function" "classifier" {
 }
 
 resource "aws_lambda_function" "extractor" {
-  function_name    = "${local.name_prefix}-extractor"
-  filename         = data.archive_file.extractor.output_path
-  source_code_hash = data.archive_file.extractor.output_base64sha256
-  handler          = "handler.lambda_handler"
-  runtime          = "python3.12"
-  architectures    = ["arm64"]
-  role             = aws_iam_role.processing.arn
-  timeout          = 120
-  memory_size      = 512
+  function_name                  = "${local.name_prefix}-extractor"
+  filename                       = data.archive_file.extractor.output_path
+  source_code_hash               = data.archive_file.extractor.output_base64sha256
+  handler                        = "handler.lambda_handler"
+  runtime                        = "python3.12"
+  architectures                  = ["arm64"]
+  role                           = aws_iam_role.processing.arn
+  timeout                        = 120
+  memory_size                    = 512
+  reserved_concurrent_executions = var.processing_concurrency
 
   environment {
     variables = {

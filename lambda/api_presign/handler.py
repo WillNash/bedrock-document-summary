@@ -3,10 +3,11 @@ import json
 import logging
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import boto3.session
 from botocore.config import Config
+from botocore.exceptions import ClientError
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -16,6 +17,31 @@ s3_client = boto3.client(
     's3',
     config=Config(signature_version='s3v4', s3={'addressing_style': 'virtual'})
 )
+
+
+def _check_and_increment_quota(table, user_id, limit):
+    """Atomically increment today's upload counter. Returns False if limit reached."""
+    now = datetime.now(timezone.utc)
+    today = now.strftime('%Y-%m-%d')
+    midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    try:
+        table.update_item(
+            Key={'job_id': f'quota#{user_id}#{today}'},
+            UpdateExpression='ADD #c :one SET #ttl = :ttl',
+            ConditionExpression='attribute_not_exists(#c) OR #c < :limit',
+            ExpressionAttributeNames={'#c': 'count', '#ttl': 'ttl'},
+            ExpressionAttributeValues={
+                ':one': 1,
+                ':limit': limit,
+                ':ttl': int(midnight.timestamp()),
+            },
+        )
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+            return False
+        raise
+    return True
 
 
 def lambda_handler(event, context):
@@ -28,13 +54,24 @@ def lambda_handler(event, context):
     # Sanitize filename: strip path components
     filename = os.path.basename(filename) or 'document.txt'
 
-    job_id = str(uuid.uuid4())
     upload_bucket = os.environ['UPLOAD_BUCKET']
     jobs_table = os.environ['JOBS_TABLE']
     max_size = int(os.environ.get('UPLOAD_MAX_SIZE_BYTES', '10485760'))
+    daily_limit = int(os.environ.get('DAILY_UPLOAD_LIMIT', '20'))
+
+    table = dynamodb.Table(jobs_table)
+
+    if not _check_and_increment_quota(table, user_id, daily_limit):
+        logger.warning({'user_id': user_id, 'action': 'quota_exceeded', 'limit': daily_limit})
+        return {
+            'statusCode': 429,
+            'headers': {'Content-Type': 'application/json'},
+            'body': json.dumps({'error': 'Daily upload limit reached. Try again tomorrow.'}),
+        }
+
+    job_id = str(uuid.uuid4())
 
     # Write PENDING record before returning the presigned URL
-    table = dynamodb.Table(jobs_table)
     table.put_item(Item={
         'job_id': job_id,
         'user_id': user_id,

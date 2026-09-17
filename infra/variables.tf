@@ -61,6 +61,18 @@ variable "upload_max_size_bytes" {
   default     = 10485760
 }
 
+variable "daily_upload_limit" {
+  type        = number
+  description = "Maximum documents a single user can upload per calendar day (UTC)"
+  default     = 20
+}
+
+variable "processing_concurrency" {
+  type        = number
+  description = "Reserved concurrency for classifier and extractor Lambdas — caps simultaneous Bedrock calls across all users"
+  default     = 5
+}
+
 variable "tags" {
   type        = map(string)
   description = "Additional tags to apply to all resources"

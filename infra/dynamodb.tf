@@ -28,6 +28,11 @@ resource "aws_dynamodb_table" "jobs" {
     projection_type = "ALL"
   }
 
+  ttl {
+    attribute_name = "ttl"
+    enabled        = true
+  }
+
   point_in_time_recovery {
     enabled = true
   }
