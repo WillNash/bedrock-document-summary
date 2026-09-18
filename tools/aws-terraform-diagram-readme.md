@@ -4,7 +4,7 @@ Generates a self-contained, interactive HTML diagram of an AWS architecture dire
 
 ## Requirements
 
-Python 3.11+ with two packages:
+Python 3.11+ with one package:
 
 ```bash
 pip install -r tools/requirements.txt
@@ -12,8 +12,9 @@ pip install -r tools/requirements.txt
 
 ```
 python-hcl2==8.1.4
-pyvis==0.3.2
 ```
+
+An internet connection is required **at generation time** — the tool fetches Cytoscape.js, dagre, and cytoscape-dagre from CDN and embeds them inline. The generated HTML file has no external dependencies and can be opened offline.
 
 ## Quick start
 
@@ -77,11 +78,13 @@ The output is a single HTML file with no external dependencies. Open it in any m
 | Zoom | Scroll wheel, or pinch on trackpad |
 | Move a node | Click and drag the node |
 | Inspect a resource | Hover over a node to see its Terraform address and key attributes |
+| Highlight connections | Click a node to highlight it and its direct dependencies |
+| Clear highlight | Click the background or a group container box |
 | Toggle a service group | Use the checkboxes in the header bar |
-| Fit all nodes to screen | Click the navigation button (bottom-left) or press `f` |
+| Fit all nodes to screen | Click **Fit** in the header or press `f` |
 | Zoom in / out with keyboard | `+` / `-` |
 
-Arrows point **from dependent to dependency** — the same direction as `terraform graph`. For example, an arrow from `aws_lambda_function.api_presign` to `aws_s3_bucket.uploads` means the Lambda references the bucket.
+Resources are grouped into labelled container boxes by service category. Arrows point **from dependent to dependency** — the same direction as `terraform graph`. For example, an arrow from `aws_lambda_function.api_presign` to `aws_s3_bucket.uploads` means the Lambda references the bucket.
 
 ## Primary and support resources
 

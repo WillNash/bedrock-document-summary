@@ -3,6 +3,9 @@
 tf_arch_diagram.py — Generate an interactive HTML AWS architecture diagram
 from a folder of Terraform .tf files. Pure Python, no Terraform binary required.
 
+Fetches Cytoscape.js, dagre, and cytoscape-dagre from CDN at generation time
+and embeds them inline, so the output HTML has no external dependencies.
+
 Usage:
     python tf_arch_diagram.py <folder> [OPTIONS]
 
@@ -22,7 +25,7 @@ import base64
 import json
 import re
 import sys
-import tempfile
+import urllib.request
 import webbrowser
 from datetime import date
 from pathlib import Path
@@ -33,17 +36,14 @@ try:
 except ImportError:
     sys.exit("Error: python-hcl2 is not installed. Run: pip install python-hcl2")
 
-try:
-    from pyvis.network import Network
-except ImportError:
-    sys.exit("Error: pyvis is not installed. Run: pip install pyvis")
-
 
 # ── Type aliases ──────────────────────────────────────────────────────────────
 # hcl2 returns untyped nested dicts at an external boundary; Any is justified.
 Attrs: TypeAlias = dict[str, Any]
 Registry: TypeAlias = dict[str, Attrs]
 GroupNodes: TypeAlias = dict[str, list[str]]
+# Cytoscape.js elements payload: {"nodes": [...], "edges": [...]}
+CyElements: TypeAlias = dict[str, list[dict[str, Any]]]
 
 
 # ── Resource catalog ──────────────────────────────────────────────────────────
@@ -372,53 +372,42 @@ def _collapse_support_edges(
     return result
 
 
-# ── Graph construction ────────────────────────────────────────────────────────
+# ── Cytoscape rendering ───────────────────────────────────────────────────────
 
-def build_graph(
+def _group_id(group: str) -> str:
+    """Sanitise group name to a safe CSS/HTML id fragment."""
+    return "grp-" + re.sub(r"[^a-zA-Z0-9_\-]", "_", group)
+
+
+def _build_tooltip(key: str, attrs: Attrs, entry: ResourceEntry) -> str:
+    lines = [f"<b>{key}</b>", f"Group: {entry.group}"]
+    for attr_name in ("function_name", "name", "bucket", "table_name", "alarm_name"):
+        val = attrs.get(attr_name)
+        if val and isinstance(val, str) and not val.startswith("$"):
+            lines.append(f"{attr_name}: {val}")
+            break
+    if "for_each" in attrs:
+        lines.append("(for_each — multiple instances at apply time)")
+    elif "count" in attrs:
+        lines.append(f"count: {attrs['count']}")
+    return "<br>".join(lines)
+
+
+def build_cytoscape_elements(
     registry: Registry,
     edges: list[tuple[str, str]],
     show_support: bool,
     icon_dir: Path | None,
-) -> tuple[Network, GroupNodes]:
+) -> tuple[CyElements, GroupNodes]:
     """
-    Build the pyvis Network. Returns (network, group_nodes) where
-    group_nodes maps group name → list of node IDs in that group.
+    Build Cytoscape.js compound-node elements from the resource registry.
+    Group container nodes are compound parents; resource nodes are their children.
+    Returns (elements, group_nodes) where group_nodes maps group → list of node IDs.
     """
-    net = Network(
-        height="870px",
-        width="100%",
-        directed=True,
-        cdn_resources="in_line",   # embeds vis.js inline — no CDN needed at render time
-        bgcolor="#1a1a2e",
-        font_color="white",
-        notebook=False,
-    )
-
-    net.set_options(json.dumps({
-        "physics": {
-            "solver": "forceAtlas2Based",
-            "forceAtlas2Based": {
-                "gravitationalConstant": -50,
-                "springLength": 150,
-                "springConstant": 0.05,
-                "damping": 0.4,
-            },
-            "stabilization": {"iterations": 200},
-        },
-        "layout": {"improvedLayout": True},
-        "interaction": {
-            "hover": True,
-            "tooltipDelay": 150,
-            "navigationButtons": True,
-            "keyboard": True,
-        },
-        "edges": {
-            "smooth": {"type": "curvedCW", "roundness": 0.1},
-            "font": {"size": 0},
-        },
-    }))
-
+    nodes: list[dict[str, Any]] = []
+    cy_edges: list[dict[str, Any]] = []
     group_nodes: GroupNodes = {}
+    added_groups: set[str] = set()
 
     for key, attrs in registry.items():
         rtype, rname = key.rsplit(".", 1)
@@ -427,79 +416,401 @@ def build_graph(
         if not show_support and entry.group == _SUPPORT_GROUP:
             continue
 
-        group_nodes.setdefault(entry.group, []).append(key)
-        color = GROUP_COLORS.get(entry.group, "#888888")
+        group = entry.group
+        color = GROUP_COLORS.get(group, "#888888")
+        group_nodes.setdefault(group, []).append(key)
 
-        # Build a concise hover tooltip
-        tooltip_lines = [f"<b>{key}</b>", f"Group: {entry.group}"]
-        for attr_name in ("function_name", "name", "bucket", "table_name", "alarm_name"):
-            val = attrs.get(attr_name)
-            if val and isinstance(val, str) and not val.startswith("$"):
-                tooltip_lines.append(f"{attr_name}: {val}")
-                break
-        if "for_each" in attrs:
-            tooltip_lines.append("(for_each — multiple instances at apply time)")
-        elif "count" in attrs:
-            tooltip_lines.append(f"count: {attrs['count']}")
-        tooltip = "<br>".join(tooltip_lines)
+        if group not in added_groups:
+            nodes.append({
+                "data": {"id": _group_id(group), "label": group, "color": color},
+                "classes": "group-container",
+            })
+            added_groups.add(group)
+
+        node_data: dict[str, Any] = {
+            "id": key,
+            "label": rname,
+            "parent": _group_id(group),
+            "tooltip": _build_tooltip(key, attrs, entry),
+            "group": group,
+        }
 
         if entry.group == _SUPPORT_GROUP:
-            net.add_node(
-                key,
-                label=rname,
-                title=tooltip,
-                shape="dot",
-                size=8,
-                color={"background": "#555555", "border": "#777777"},
-                group=entry.group,
-            )
+            nodes.append({"data": node_data, "classes": "support-node"})
         elif entry.icon_key:
-            net.add_node(
-                key,
-                label=rname,
-                title=tooltip,
-                shape="image",
-                image=_get_icon_uri(entry.icon_key, icon_dir),
-                size=35,
-                group=entry.group,
-                font={"color": "white", "size": 11, "strokeWidth": 2, "strokeColor": "#1a1a2e"},
-            )
+            node_data["icon"] = _get_icon_uri(entry.icon_key, icon_dir)
+            nodes.append({"data": node_data, "classes": "primary-node"})
         else:
-            # "Other" group — no icon key defined in RESOURCE_CATALOG
-            net.add_node(
-                key,
-                label=rname,
-                title=tooltip,
-                shape="ellipse",
-                size=25,
-                color={"background": color, "border": color},
-                group=entry.group,
-                font={"color": "white", "size": 11},
-            )
+            node_data["color"] = color
+            nodes.append({"data": node_data, "classes": "other-node"})
 
-    node_ids_in_graph = set(net.get_nodes())
+    node_ids = {n["data"]["id"] for n in nodes}
     for src, dst in edges:
-        if src in node_ids_in_graph and dst in node_ids_in_graph:
-            net.add_edge(src, dst, arrows="to", color={"color": "#aaaaaa", "opacity": 0.7}, width=1.5)
+        if src in node_ids and dst in node_ids:
+            cy_edges.append({"data": {"source": src, "target": dst}})
 
-    return net, group_nodes
+    return {"nodes": nodes, "edges": cy_edges}, group_nodes
 
 
-# ── HTML post-processing ──────────────────────────────────────────────────────
+# CDN URLs for the Cytoscape.js rendering stack — fetched once at generation
+# time and embedded inline so the output HTML has no external dependencies.
+_JS_URLS: Final[dict[str, str]] = {
+    "cytoscape":       "https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.29.2/cytoscape.min.js",
+    "dagre":           "https://cdnjs.cloudflare.com/ajax/libs/dagre/0.8.5/dagre.min.js",
+    "cytoscape-dagre": "https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.min.js",
+}
 
-_INLINE_CSS = """\
-<meta charset="utf-8">
-<style>
-  body { margin: 0; padding: 0; background: #1a1a2e; font-family: Arial, sans-serif; overflow-x: hidden; }
-  #tf-arch-header { background: #16213e; padding: 10px 18px 7px; border-bottom: 2px solid #0f3460; position: sticky; top: 0; z-index: 1000; box-shadow: 0 2px 8px rgba(0,0,0,0.5); }
-  #tf-arch-title { margin: 0 0 7px; color: #e2e8f0; font-size: 17px; font-weight: bold; letter-spacing: 0.3px; }
-  #tf-arch-legend { display: flex; flex-wrap: wrap; gap: 12px 18px; margin-bottom: 6px; }
-  .grp-swatch { display: flex; align-items: center; gap: 6px; color: #cbd5e0; font-size: 12px; cursor: pointer; user-select: none; }
-  .grp-swatch input[type=checkbox] { cursor: pointer; accent-color: #4a9eff; }
-  .swatch-dot { display: inline-block; width: 11px; height: 11px; border-radius: 50%; flex-shrink: 0; }
-  #tf-arch-footer { color: #718096; font-size: 11px; margin-top: 4px; }
-</style>"""
 
+def _fetch_js(name: str, url: str, verbose: bool = False) -> str:
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "tf-arch-diagram/1.0"})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            content = resp.read().decode("utf-8")
+        if verbose:
+            print(f"  Fetched {name} ({len(content):,} bytes)", file=sys.stderr)
+        return content
+    except Exception as err:
+        print(f"Warning: could not fetch {name} from {url}: {err}", file=sys.stderr)
+        return f"/* ERROR: {name} unavailable — diagram may not render correctly */"
+
+
+def _build_script_tags(verbose: bool = False) -> str:
+    parts = []
+    for name, url in _JS_URLS.items():
+        js = _fetch_js(name, url, verbose)
+        parts.append(f"<script>\n{js}\n</script>")
+    return "\n".join(parts)
+
+
+# ── HTML page constants ───────────────────────────────────────────────────────
+
+_PAGE_CSS = """\
+body {
+  margin: 0; padding: 0;
+  background: #1a1a2e;
+  font-family: Arial, sans-serif;
+  overflow: hidden;
+}
+#tf-arch-header {
+  background: #16213e;
+  padding: 10px 18px 8px;
+  border-bottom: 2px solid #0f3460;
+  position: relative;
+  z-index: 1000;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+}
+#tf-arch-top {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 8px;
+}
+#tf-arch-title {
+  color: #e2e8f0;
+  font-size: 17px;
+  font-weight: bold;
+  letter-spacing: 0.3px;
+  margin: 0;
+}
+#tf-arch-controls button {
+  background: #0f3460;
+  color: #e2e8f0;
+  border: 1px solid #4a6fa5;
+  border-radius: 4px;
+  padding: 3px 11px;
+  cursor: pointer;
+  font-size: 13px;
+  margin-right: 3px;
+}
+#tf-arch-controls button:hover { background: #1a4a7a; }
+#tf-arch-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  margin-bottom: 6px;
+}
+.grp-swatch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #cbd5e0;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.grp-swatch input[type=checkbox] { cursor: pointer; accent-color: #4a9eff; }
+.swatch-dot {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+#tf-arch-footer { color: #718096; font-size: 11px; margin-top: 4px; }
+#cy {
+  width: 100%;
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  top: 0; /* overridden by JS after header height is measured */
+}
+#cy-tooltip {
+  position: fixed;
+  background: rgba(15, 25, 60, 0.95);
+  color: #e2e8f0;
+  border: 1px solid #4a6fa5;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  pointer-events: none;
+  display: none;
+  max-width: 300px;
+  z-index: 2000;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+}"""
+
+# Sentinel strings __ELEMENTS__ and __GROUP_NODES__ are substituted at
+# generation time by _build_init_script(). They cannot appear in the JSON
+# payload because resource names and group names contain only alphanumerics,
+# underscores, hyphens, dots, and slashes.
+_INIT_JS_TEMPLATE = """\
+(function () {
+  var ELEMENTS   = __ELEMENTS__;
+  var GROUP_NODES = __GROUP_NODES__;
+
+  function gid(g) {
+    return 'grp-' + g.replace(/[^a-zA-Z0-9_\\-]/g, '_');
+  }
+
+  var cy;
+
+  function sizeCanvas() {
+    var h = document.getElementById('tf-arch-header').offsetHeight;
+    document.getElementById('cy').style.top = h + 'px';
+    if (cy) cy.resize();
+  }
+
+  window.addEventListener('DOMContentLoaded', function () {
+    sizeCanvas();
+
+    cy = cytoscape({
+      container: document.getElementById('cy'),
+      elements:  ELEMENTS,
+      minZoom:   0.05,
+      maxZoom:   3,
+      style: [
+        {
+          selector: 'node.group-container',
+          style: {
+            'label':                    'data(label)',
+            'text-valign':              'top',
+            'text-halign':              'center',
+            'text-margin-y':            -12,
+            'font-size':                '14px',
+            'font-weight':              'bold',
+            'color':                    '#e2e8f0',
+            'text-background-color':    '#16213e',
+            'text-background-opacity':  0.8,
+            'text-background-padding':  '4px',
+            'background-color':         'data(color)',
+            'background-opacity':       0.1,
+            'border-color':             'data(color)',
+            'border-width':             2,
+            'border-opacity':           0.75,
+            'padding':                  '30px',
+          }
+        },
+        {
+          selector: 'node.primary-node',
+          style: {
+            'label':             'data(label)',
+            'text-valign':       'bottom',
+            'text-halign':       'center',
+            'text-margin-y':     6,
+            'font-size':         '10px',
+            'color':             '#e2e8f0',
+            'text-outline-color': '#1a1a2e',
+            'text-outline-width': 2,
+            'width':             56,
+            'height':            56,
+            'background-image':  'data(icon)',
+            'background-fit':    'cover',
+            'background-color':  '#1a1a2e',
+            'border-width':      0,
+            'shape':             'rectangle',
+          }
+        },
+        {
+          selector: 'node.support-node',
+          style: {
+            'width':            10,
+            'height':           10,
+            'background-color': '#555555',
+            'border-color':     '#777777',
+            'border-width':     1,
+            'label':            '',
+            'shape':            'ellipse',
+          }
+        },
+        {
+          selector: 'node.other-node',
+          style: {
+            'label':            'data(label)',
+            'text-valign':      'center',
+            'text-halign':      'center',
+            'font-size':        '10px',
+            'color':            '#ffffff',
+            'width':            50,
+            'height':           50,
+            'background-color': 'data(color)',
+            'border-width':     0,
+            'shape':            'ellipse',
+          }
+        },
+        {
+          selector: 'edge',
+          style: {
+            'width':               1.5,
+            'line-color':          '#aaaaaa',
+            'target-arrow-color':  '#aaaaaa',
+            'target-arrow-shape':  'triangle',
+            'curve-style':         'bezier',
+            'opacity':             0.7,
+            'arrow-scale':         0.8,
+          }
+        },
+        {
+          selector: '.faded',
+          style: { 'opacity': 0.1 }
+        },
+        {
+          selector: '.highlighted',
+          style: { 'opacity': 1 }
+        },
+        {
+          selector: 'node.group-container.faded',
+          style: { 'opacity': 0.4 }
+        }
+      ],
+    });
+
+    cy.layout({
+      name:    'dagre',
+      rankDir: 'LR',
+      nodeSep: 50,
+      rankSep: 120,
+      edgeSep: 10,
+      animate: false,
+      padding: 30,
+      spacingFactor: 1.1,
+      nodeDimensionsIncludeLabels: false,
+      fit: false,
+    }).run();
+
+    cy.fit(undefined, 40);
+    sizeCanvas();
+
+    // ── Tooltip ──────────────────────────────────────────────────────────────
+    var tooltip = document.getElementById('cy-tooltip');
+
+    cy.on('mouseover', 'node.primary-node, node.support-node, node.other-node', function (e) {
+      var tip = e.target.data('tooltip');
+      if (tip) {
+        tooltip.innerHTML = tip;
+        tooltip.style.display = 'block';
+      }
+    });
+
+    cy.on('mousemove', function (e) {
+      if (tooltip.style.display !== 'none') {
+        var oe = e.originalEvent;
+        tooltip.style.left = (oe.clientX + 14) + 'px';
+        tooltip.style.top  = (oe.clientY + 14) + 'px';
+      }
+    });
+
+    cy.on('mouseout', 'node', function () {
+      tooltip.style.display = 'none';
+    });
+
+    // ── Click to highlight ───────────────────────────────────────────────────
+    cy.on('tap', 'node.primary-node, node.support-node, node.other-node', function (e) {
+      var node = e.target;
+      cy.elements().not('.group-container').addClass('faded').removeClass('highlighted');
+      node.addClass('highlighted').removeClass('faded');
+      node.connectedEdges().addClass('highlighted').removeClass('faded');
+      node.connectedEdges().connectedNodes().addClass('highlighted').removeClass('faded');
+    });
+
+    cy.on('tap', 'node.group-container', function () {
+      cy.elements().removeClass('faded highlighted');
+      tooltip.style.display = 'none';
+    });
+
+    cy.on('tap', function (e) {
+      if (e.target === cy) {
+        cy.elements().removeClass('faded highlighted');
+        tooltip.style.display = 'none';
+      }
+    });
+
+    // ── Group toggles ────────────────────────────────────────────────────────
+    document.querySelectorAll('.grp-toggle').forEach(function (cb) {
+      cb.addEventListener('change', function () {
+        var group = this.dataset.group;
+        var ids   = GROUP_NODES[group] || [];
+        var disp  = this.checked ? 'element' : 'none';
+
+        cy.getElementById(gid(group)).style('display', disp);
+        ids.forEach(function (id) {
+          cy.getElementById(id).style('display', disp);
+        });
+
+        // Hide edges where either endpoint is hidden
+        cy.edges().forEach(function (edge) {
+          var sh = edge.source().style('display') === 'none';
+          var th = edge.target().style('display') === 'none';
+          edge.style('display', (sh || th) ? 'none' : 'element');
+        });
+      });
+    });
+
+    // ── Controls ─────────────────────────────────────────────────────────────
+    document.getElementById('btn-fit').addEventListener('click', function () {
+      cy.fit(undefined, 40);
+    });
+    document.getElementById('btn-zoom-in').addEventListener('click', function () {
+      cy.zoom({ level: cy.zoom() * 1.3, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } });
+    });
+    document.getElementById('btn-zoom-out').addEventListener('click', function () {
+      cy.zoom({ level: cy.zoom() / 1.3, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } });
+    });
+
+    // ── Keyboard shortcuts ───────────────────────────────────────────────────
+    document.addEventListener('keydown', function (e) {
+      if (e.target.tagName === 'INPUT') return;
+      switch (e.key) {
+        case 'f':
+          cy.fit(undefined, 40);
+          break;
+        case '+':
+        case '=':
+          cy.zoom({ level: cy.zoom() * 1.2, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } });
+          break;
+        case '-':
+          cy.zoom({ level: cy.zoom() / 1.2, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } });
+          break;
+      }
+    });
+  });
+
+  window.addEventListener('resize', sizeCanvas);
+})();"""
+
+
+# ── HTML assembly ─────────────────────────────────────────────────────────────
 
 def _build_legend_html(
     group_nodes: GroupNodes,
@@ -515,9 +826,19 @@ def _build_legend_html(
         f'</label>'
         for group in sorted(group_nodes)
     ]
+    controls = (
+        '<div id="tf-arch-controls">'
+        '<button id="btn-fit" title="Fit all nodes to screen (F)">Fit</button>'
+        '<button id="btn-zoom-in" title="Zoom in (+)">+</button>'
+        '<button id="btn-zoom-out" title="Zoom out (−)">−</button>'
+        '</div>'
+    )
     return (
         f'<div id="tf-arch-header">'
+        f'<div id="tf-arch-top">'
         f'<div id="tf-arch-title">{title}</div>'
+        f'{controls}'
+        f'</div>'
         f'<div id="tf-arch-legend">{"".join(swatches)}</div>'
         f'<div id="tf-arch-footer">'
         f'Generated by tf_arch_diagram.py · {date.today()} · '
@@ -527,109 +848,60 @@ def _build_legend_html(
     )
 
 
-def _build_toggle_script(group_nodes: GroupNodes) -> str:
-    group_map_json = json.dumps(group_nodes)
-    return f"""\
-<script>
-(function() {{
-  var groupNodes = {group_map_json};
-
-  function getNetwork() {{
-    // Detect the vis.Network instance by scanning window scope.
-    // pyvis 0.3.x assigns it to a variable named 'network' or similar.
-    var common = ['network', 'network1', 'net'];
-    for (var i = 0; i < common.length; i++) {{
-      var obj = window[common[i]];
-      if (obj && obj.body && obj.body.data && obj.body.data.nodes) return obj;
-    }}
-    for (var k in window) {{
-      try {{
-        var obj = window[k];
-        if (obj && typeof obj === 'object' && obj.body && obj.body.data && obj.body.data.nodes) return obj;
-      }} catch (e) {{}}
-    }}
-    return null;
-  }}
-
-  function toggleGroup(group, visible) {{
-    var net = getNetwork();
-    if (!net) return;
-    var ids = groupNodes[group] || [];
-    var updates = ids.map(function(id) {{ return {{ id: id, hidden: !visible }}; }});
-    if (updates.length) net.body.data.nodes.update(updates);
-  }}
-
-  window.addEventListener('load', function() {{
-    // Small delay so vis.js finishes its own initialisation
-    setTimeout(function() {{
-      document.querySelectorAll('.grp-toggle').forEach(function(cb) {{
-        cb.addEventListener('change', function() {{
-          toggleGroup(this.dataset.group, this.checked);
-        }});
-      }});
-    }}, 300);
-  }});
-}})();
-</script>"""
+def _build_init_script(elements_json: str, group_nodes_json: str) -> str:
+    js = (
+        _INIT_JS_TEMPLATE
+        .replace("__ELEMENTS__", elements_json)
+        .replace("__GROUP_NODES__", group_nodes_json)
+    )
+    return f"<script>\n{js}\n</script>"
 
 
-def _get_raw_html(net: Network) -> str:
-    # generate_html() confirmed present in pyvis 0.3.2; tempfile fallback
-    # retained for forward/backward compatibility with other 0.3.x releases.
-    if hasattr(net, "generate_html"):
-        return net.generate_html(local=False, notebook=False)
-    tmp = tempfile.NamedTemporaryFile(suffix=".html", delete=False)
-    tmp.close()
-    tmp_path = Path(tmp.name)
-    try:
-        net.write_html(str(tmp_path))
-        return tmp_path.read_text(encoding="utf-8")
-    finally:
-        tmp_path.unlink()
+def _build_cytoscape_html(
+    elements: CyElements,
+    group_nodes: GroupNodes,
+    title: str,
+    resource_count: int,
+    edge_count: int,
+    script_tags: str,
+) -> str:
+    elements_json   = json.dumps(elements,    ensure_ascii=False)
+    group_nodes_json = json.dumps(group_nodes, ensure_ascii=False)
+    legend      = _build_legend_html(group_nodes, title, resource_count, edge_count)
+    init_script = _build_init_script(elements_json, group_nodes_json)
 
-
-def _strip_cdn_tags(html: str) -> str:
-    # pyvis injects Bootstrap from CDN even with cdn_resources='in_line' (issue #228).
-    html = re.sub(r'<link[^>]+href=["\']https://[^"\']*["\'][^>]*/?>', "", html)
-    html = re.sub(r'<script[^>]+src=["\']https://[^"\']*["\'][^>]*></script>', "", html)
-    return html
-
-
-def _inject_head(html: str) -> str:
-    return html.replace("<head>", "<head>\n" + _INLINE_CSS, 1)
-
-
-def _inject_legend(html: str, legend: str) -> str:
-    # String insertion rather than re.sub to avoid misinterpreting legend HTML
-    # as a regex replacement string (backslashes, ampersands, etc.).
-    body_match = re.search(r"<body[^>]*>", html)
-    if not body_match:
-        return html
-    pos = body_match.end()
-    return html[:pos] + "\n" + legend + html[pos:]
-
-
-def _inject_toggle_script(html: str, script: str) -> str:
-    return html.replace("</body>", script + "\n</body>", 1)
+    return (
+        "<!DOCTYPE html>\n"
+        "<html lang='en'>\n"
+        "<head>\n"
+        "<meta charset='utf-8'>\n"
+        f"<title>{title}</title>\n"
+        f"<style>\n{_PAGE_CSS}\n</style>\n"
+        f"{script_tags}\n"
+        "</head>\n"
+        "<body>\n"
+        f"{legend}\n"
+        "<div id='cy'></div>\n"
+        "<div id='cy-tooltip'></div>\n"
+        f"{init_script}\n"
+        "</body>\n"
+        "</html>"
+    )
 
 
 def generate_html(
-    net: Network,
+    elements: CyElements,
     group_nodes: GroupNodes,
     title: str,
     output_path: Path,
     resource_count: int,
     edge_count: int,
+    verbose: bool = False,
 ) -> None:
-    legend = _build_legend_html(group_nodes, title, resource_count, edge_count)
-    toggle = _build_toggle_script(group_nodes)
-
-    html = _get_raw_html(net)
-    html = _strip_cdn_tags(html)
-    html = _inject_head(html)
-    html = _inject_legend(html, legend)
-    html = _inject_toggle_script(html, toggle)
-
+    script_tags = _build_script_tags(verbose=verbose)
+    html = _build_cytoscape_html(
+        elements, group_nodes, title, resource_count, edge_count, script_tags
+    )
     output_path.write_text(html, encoding="utf-8")
 
 
@@ -706,14 +978,19 @@ def main() -> None:
     if args.verbose:
         print(f"  Found {len(edges)} dependency edges", file=sys.stderr)
 
-    net, group_nodes = build_graph(registry, edges, show_support=show_support, icon_dir=icon_dir)
+    elements, group_nodes = build_cytoscape_elements(
+        registry, edges, show_support=show_support, icon_dir=icon_dir
+    )
 
     resource_count = sum(len(ids) for ids in group_nodes.values())
-    edge_count = len(net.get_edges())
+    edge_count = len(elements["edges"])
 
     output_path = Path(args.output)
     try:
-        generate_html(net, group_nodes, title, output_path, resource_count, edge_count)
+        generate_html(
+            elements, group_nodes, title, output_path,
+            resource_count, edge_count, verbose=args.verbose,
+        )
     except IOError as err:
         print(f"Error: could not write '{output_path}': {err}", file=sys.stderr)
         sys.exit(1)
