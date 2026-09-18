@@ -50,6 +50,7 @@ Creates `infra/lambda_packages/layer.zip` with `jinja2` and `jsonschema`. Must b
 
 ```bash
 cp infra/terraform.tfvars.example infra/terraform.tfvars
+cp infra/backend.hcl.example infra/backend.hcl
 ```
 
 Edit `terraform.tfvars`. The only required variable is `project_name`. Key options:
@@ -66,7 +67,7 @@ Edit `terraform.tfvars`. The only required variable is `project_name`. Key optio
 ### 3. First apply
 
 ```bash
-terraform -chdir=infra init
+terraform -chdir=infra init -backend-config=backend.hcl
 terraform -chdir=infra apply
 ```
 
@@ -94,6 +95,119 @@ Then apply again — only the Cognito App Client is updated:
 ```bash
 terraform -chdir=infra apply
 ```
+
+## CI/CD
+
+Two GitHub Actions workflows are included:
+
+| Workflow | Trigger | What it does |
+|---|---|---|
+| `ci.yml` | Every push; PRs to main | Runs pytest on all branches. On pushes to main, also runs `terraform fmt`, `validate`, and `plan`. |
+| `deploy.yml` | Manual (`workflow_dispatch`) | Builds the Lambda layer, runs `terraform apply`, deploys the frontend. |
+
+### One-time setup
+
+#### 1. Create Terraform state infrastructure
+
+Terraform needs a remote backend so state is shared between your machine and CI. Create an S3 bucket and a DynamoDB table for locking:
+
+```bash
+# Replace the names — bucket names are globally unique
+aws s3api create-bucket \
+  --bucket your-project-tf-state \
+  --region us-east-1
+
+aws s3api put-bucket-versioning \
+  --bucket your-project-tf-state \
+  --versioning-configuration Status=Enabled
+
+aws dynamodb create-table \
+  --table-name your-project-tf-locks \
+  --attribute-definitions AttributeName=LockID,AttributeType=S \
+  --key-schema AttributeName=LockID,KeyType=HASH \
+  --billing-mode PAY_PER_REQUEST \
+  --region us-east-1
+```
+
+#### 2. Create your local backend config
+
+```bash
+cp infra/backend.hcl.example infra/backend.hcl
+```
+
+Edit `infra/backend.hcl` with the bucket and table names you just created:
+
+```hcl
+bucket         = "your-project-tf-state"
+key            = "bedrock-doc-summary/terraform.tfstate"
+region         = "us-east-1"
+dynamodb_table = "your-project-tf-locks"
+```
+
+`backend.hcl` is gitignored — it stays on your machine and in GitHub secrets only.
+
+#### 3. Migrate local state to S3
+
+If you have existing local state (from a previous `terraform apply`), reinitialise to migrate it:
+
+```bash
+terraform -chdir=infra init -backend-config=backend.hcl -migrate-state
+```
+
+If this is a fresh repo with no prior state, omit `-migrate-state`:
+
+```bash
+terraform -chdir=infra init -backend-config=backend.hcl
+```
+
+#### 4. Commit terraform.tfvars
+
+`infra/terraform.tfvars` is tracked by git (none of its values are sensitive). If you haven't committed it yet:
+
+```bash
+git add infra/terraform.tfvars
+git commit -m "add terraform.tfvars"
+```
+
+#### 5. Add GitHub secrets
+
+Go to **Settings → Secrets and variables → Actions** in your GitHub repository and add:
+
+| Secret | Value |
+|---|---|
+| `AWS_ACCESS_KEY_ID` | Access key ID for a CI IAM user |
+| `AWS_SECRET_ACCESS_KEY` | Secret access key for that user |
+| `TF_BACKEND_CONFIG` | The full contents of your `infra/backend.hcl` |
+
+The IAM user needs permissions to create, update, and delete all resources in the stack (Lambda, S3, DynamoDB, API Gateway, CloudFront, Cognito, Step Functions, Bedrock, WAF, KMS, IAM roles, CloudWatch, SQS, SNS). Using `AdministratorAccess` is the easiest starting point; scope it down to least-privilege once the stack is stable.
+
+#### 6. Optionally configure the production environment
+
+The deploy workflow runs in a GitHub environment called `production`. If you want to require a manual approval before every deploy:
+
+1. Go to **Settings → Environments → production**
+2. Enable **Required reviewers** and add yourself
+
+### Day-to-day usage
+
+**Tests** run automatically on every push to any branch. No setup needed.
+
+**Terraform plan** runs automatically when you push or merge to `main`. Check the Actions tab to see what would change before triggering a deploy.
+
+**Deploy** is always manual. Go to **Actions → Deploy → Run workflow** and click the button. The workflow:
+1. Builds the Lambda layer
+2. Runs `terraform apply`
+3. Syncs the frontend to S3 and invalidates the CloudFront cache
+
+### First deploy via CI
+
+The Cognito callback URL two-step still applies on a first deploy. Run the deploy workflow once with the localhost defaults in `terraform.tfvars`, then update the callback URLs with the CloudFront domain that's printed in the deploy log, commit, and run the deploy workflow a second time.
+
+### Subsequent deploys
+
+For code changes (Lambda handlers, schemas, templates, prompts): push to main, check the plan, then trigger the deploy workflow.
+
+For infrastructure changes (adding resources, changing variables): same flow — the plan on main shows the diff before you deploy.
 
 ## Development
 
