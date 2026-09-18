@@ -1,0 +1,9 @@
+# Copy this file to backend.hcl and fill in real values.
+# backend.hcl is gitignored — never commit it.
+#
+# Usage: terraform -chdir=infra init -backend-config=backend.hcl
+
+bucket         = "your-tf-state-bucket"
+key            = "bedrock-doc-summary/terraform.tfstate"
+region         = "us-east-1"
+dynamodb_table = "your-tf-lock-table"

@@ -1,5 +1,7 @@
 *.tfvars
 !terraform.tfvars.example
+!infra/terraform.tfvars
+infra/backend.hcl
 *.zip
 .terraform/
 .terraform.lock.hcl

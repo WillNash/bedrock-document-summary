@@ -1,0 +1,40 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy to AWS
+    runs-on: ubuntu-latest
+    environment: production  # enables GitHub environment protection rules
+    env:
+      AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION:    us-east-1
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~> 1.6"
+
+      - name: Write backend config
+        run: echo "${{ secrets.TF_BACKEND_CONFIG }}" > infra/backend.hcl
+
+      - name: Build Lambda layer
+        run: ./scripts/build_lambdas.sh
+
+      - name: Terraform Init
+        run: terraform -chdir=infra init -backend-config=backend.hcl
+
+      - name: Terraform Apply
+        run: terraform -chdir=infra apply -auto-approve -input=false
+
+      - name: Deploy frontend
+        run: ./scripts/deploy_frontend.sh

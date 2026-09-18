@@ -19,9 +19,10 @@ REQUIREMENTS="$REPO_ROOT/lambda/requirements.txt"
 
 echo "==> Building Lambda dependency layer..."
 
-# Clean previous build
+# Clean previous build; ensure the output directory exists (gitignored, absent on fresh clone)
 rm -rf "$LAYER_SRC"
 mkdir -p "$LAYER_SRC/python"
+mkdir -p "$(dirname "$LAYER_ZIP")"
 
 # Install dependencies into the layer structure
 # Lambda layers expect: python.zip with /python/<package> at root
