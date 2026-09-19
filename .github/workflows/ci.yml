@@ -44,7 +44,9 @@ jobs:
           terraform_version: "~> 1.6"
 
       - name: Write backend config
-        run: echo "${{ secrets.TF_BACKEND_CONFIG }}" > infra/backend.hcl
+        env:
+          TF_BACKEND_CONFIG: ${{ secrets.TF_BACKEND_CONFIG }}
+        run: echo "$TF_BACKEND_CONFIG" > infra/backend.hcl
 
       - name: Build Lambda layer
         run: ./scripts/build_lambdas.sh
