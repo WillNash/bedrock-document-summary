@@ -20,7 +20,7 @@ jobs:
           cache: pip
 
       - name: Install test dependencies
-        run: pip install pytest jinja2 jsonschema
+        run: pip install pytest boto3 jinja2 jsonschema
 
       - name: Run tests
         run: pytest tests/ -v

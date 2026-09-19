@@ -30,7 +30,7 @@ terraform -chdir=infra apply
 
 ```bash
 # All tests (from repo root — pytest auto-discovers tests/)
-pip install pytest jinja2 jsonschema
+pip install pytest boto3 jinja2 jsonschema
 pytest tests/
 
 # Single test file
