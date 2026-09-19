@@ -57,9 +57,9 @@ resource "aws_cloudwatch_metric_alarm" "pipeline_starter_dlq" {
   namespace           = "AWS/SQS"
   period              = 60
   # Maximum is correct for a gauge metric — Sum would misrepresent a single stuck message
-  statistic           = "Maximum"
-  threshold           = 0
-  treat_missing_data  = "notBreaching"
+  statistic          = "Maximum"
+  threshold          = 0
+  treat_missing_data = "notBreaching"
 
   dimensions = {
     QueueName = aws_sqs_queue.pipeline_starter_dlq.name

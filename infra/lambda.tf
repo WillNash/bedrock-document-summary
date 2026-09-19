@@ -291,9 +291,9 @@ resource "aws_lambda_function" "extractor" {
 
   environment {
     variables = {
-      BEDROCK_MODEL_ID    = var.bedrock_model_id
-      GUARDRAIL_ID        = aws_bedrock_guardrail.main.guardrail_id
-      GUARDRAIL_VERSION   = aws_bedrock_guardrail_version.main.version
+      BEDROCK_MODEL_ID     = var.bedrock_model_id
+      GUARDRAIL_ID         = aws_bedrock_guardrail.main.guardrail_id
+      GUARDRAIL_VERSION    = aws_bedrock_guardrail_version.main.version
       PROMPT_ARNS_JSON     = jsonencode({ for k in local.extraction_doc_types : k => aws_bedrock_prompt.extraction[k].arn })
       PROMPT_VERSIONS_JSON = jsonencode({ for k in local.extraction_doc_types : k => aws_bedrock_prompt_version.extraction[k].version })
     }
