@@ -12,3 +12,4 @@ __pycache__/
 .pytest_cache/
 infra/lambda_packages/
 lambda/lambda_layer_packages/
+venv/
