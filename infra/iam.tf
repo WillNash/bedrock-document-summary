@@ -268,8 +268,8 @@ resource "aws_iam_role_policy" "processing_bedrock_prompt" {
       Effect = "Allow"
       Action = ["bedrock:GetPrompt"]
       Resource = flatten([
-        aws_bedrock_prompt.classifier.arn,
-        [for k in local.extraction_doc_types : aws_bedrock_prompt.extraction[k].arn],
+        aws_bedrockagent_prompt.classifier.arn,
+        [for k in local.extraction_doc_types : aws_bedrockagent_prompt.extraction[k].arn],
       ])
     }]
   })

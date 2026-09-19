@@ -256,8 +256,8 @@ resource "aws_lambda_function" "classifier" {
   environment {
     variables = {
       BEDROCK_CLASSIFIER_MODEL_ID = var.bedrock_classifier_model_id
-      CLASSIFIER_PROMPT_ARN       = aws_bedrock_prompt.classifier.arn
-      CLASSIFIER_PROMPT_VERSION   = aws_bedrock_prompt_version.classifier.version
+      CLASSIFIER_PROMPT_ARN       = aws_bedrockagent_prompt.classifier.arn
+      CLASSIFIER_PROMPT_VERSION   = aws_bedrockagent_prompt_version.classifier.version
       GUARDRAIL_ID                = aws_bedrock_guardrail.main.guardrail_id
       GUARDRAIL_VERSION           = aws_bedrock_guardrail_version.main.version
     }
@@ -294,8 +294,8 @@ resource "aws_lambda_function" "extractor" {
       BEDROCK_MODEL_ID     = var.bedrock_model_id
       GUARDRAIL_ID         = aws_bedrock_guardrail.main.guardrail_id
       GUARDRAIL_VERSION    = aws_bedrock_guardrail_version.main.version
-      PROMPT_ARNS_JSON     = jsonencode({ for k in local.extraction_doc_types : k => aws_bedrock_prompt.extraction[k].arn })
-      PROMPT_VERSIONS_JSON = jsonencode({ for k in local.extraction_doc_types : k => aws_bedrock_prompt_version.extraction[k].version })
+      PROMPT_ARNS_JSON     = jsonencode({ for k in local.extraction_doc_types : k => aws_bedrockagent_prompt.extraction[k].arn })
+      PROMPT_VERSIONS_JSON = jsonencode({ for k in local.extraction_doc_types : k => aws_bedrockagent_prompt_version.extraction[k].version })
     }
   }
 

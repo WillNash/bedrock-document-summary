@@ -42,7 +42,7 @@ resource "aws_bedrock_guardrail_version" "main" {
   description   = "Initial version"
 }
 
-resource "aws_bedrock_prompt" "classifier" {
+resource "aws_bedrockagent_prompt" "classifier" {
   name = "${local.name_prefix}-classifier"
 
   variants {
@@ -68,7 +68,7 @@ resource "aws_bedrock_prompt" "classifier" {
   tags            = local.common_tags
 }
 
-resource "aws_bedrock_prompt" "extraction" {
+resource "aws_bedrockagent_prompt" "extraction" {
   for_each = local.extraction_doc_types
   name     = "${local.name_prefix}-${replace(each.key, "_", "-")}"
 
@@ -95,13 +95,13 @@ resource "aws_bedrock_prompt" "extraction" {
   tags            = local.common_tags
 }
 
-resource "aws_bedrock_prompt_version" "classifier" {
-  prompt_arn  = aws_bedrock_prompt.classifier.arn
+resource "aws_bedrockagent_prompt_version" "classifier" {
+  prompt_arn  = aws_bedrockagent_prompt.classifier.arn
   description = "Initial classifier prompt version"
 }
 
-resource "aws_bedrock_prompt_version" "extraction" {
+resource "aws_bedrockagent_prompt_version" "extraction" {
   for_each    = local.extraction_doc_types
-  prompt_arn  = aws_bedrock_prompt.extraction[each.key].arn
+  prompt_arn  = aws_bedrockagent_prompt.extraction[each.key].arn
   description = "Initial ${each.key} extraction prompt version"
 }
