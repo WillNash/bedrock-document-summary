@@ -256,8 +256,8 @@ resource "aws_lambda_function" "classifier" {
   environment {
     variables = {
       BEDROCK_CLASSIFIER_MODEL_ID = var.bedrock_classifier_model_id
-      CLASSIFIER_PROMPT_ARN     = aws_bedrockagent_prompt.classifier.arn
-      CLASSIFIER_PROMPT_VERSION = "DRAFT"
+      CLASSIFIER_PROMPT_ARN       = aws_bedrockagent_prompt.classifier.arn
+      CLASSIFIER_PROMPT_VERSION   = "DRAFT"
       GUARDRAIL_ID                = aws_bedrock_guardrail.main.guardrail_id
       GUARDRAIL_VERSION           = aws_bedrock_guardrail_version.main.version
     }
