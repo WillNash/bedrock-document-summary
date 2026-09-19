@@ -36,6 +36,16 @@ jobs:
       - name: Terraform Init
         run: terraform -chdir=infra init -backend-config=backend.hcl -input=false
 
+      - name: Remove guardrail from state
+        # Provider bug causes perpetual destroy/recreate — guardrail is managed via CLI.
+        # Silently succeeds even if the resources are not in state.
+        run: |
+          terraform -chdir=infra state rm aws_bedrock_guardrail.main || true
+          terraform -chdir=infra state rm aws_bedrock_guardrail_version.main || true
+
+      - name: Ensure Bedrock guardrail
+        run: ./scripts/ensure_guardrail.sh >> $GITHUB_ENV
+
       - name: Terraform Apply
         run: terraform -chdir=infra apply -auto-approve -input=false
 

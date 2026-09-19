@@ -104,3 +104,15 @@ variable "tags" {
   description = "Additional tags to apply to all resources"
   default     = {}
 }
+
+variable "guardrail_id" {
+  type        = string
+  description = "Bedrock guardrail ID. Created by scripts/ensure_guardrail.sh and passed in by the deploy workflow."
+  default     = ""
+}
+
+variable "guardrail_version" {
+  type        = string
+  description = "Bedrock guardrail version number to use in Lambda env vars."
+  default     = "1"
+}

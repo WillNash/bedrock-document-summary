@@ -1,51 +1,7 @@
-resource "aws_bedrock_guardrail" "main" {
-  name                      = "${local.name_prefix}-phi-guardrail"
-  blocked_input_messaging   = "This request contains content that cannot be processed."
-  blocked_outputs_messaging = "The response contains content that cannot be displayed."
-
-  sensitive_information_policy_config {
-    pii_entities_config {
-      type   = "NAME"
-      action = "ANONYMIZE"
-    }
-    pii_entities_config {
-      type   = "EMAIL"
-      action = "ANONYMIZE"
-    }
-    pii_entities_config {
-      type   = "PHONE"
-      action = "ANONYMIZE"
-    }
-    pii_entities_config {
-      type   = "ADDRESS"
-      action = "ANONYMIZE"
-    }
-    pii_entities_config {
-      type   = "US_SOCIAL_SECURITY_NUMBER"
-      action = "ANONYMIZE"
-    }
-    pii_entities_config {
-      type   = "US_PASSPORT_NUMBER"
-      action = "ANONYMIZE"
-    }
-    pii_entities_config {
-      type   = "DRIVER_ID"
-      action = "ANONYMIZE"
-    }
-  }
-
-  tags = local.common_tags
-
-  lifecycle {
-    # Provider bug: description is returned as unknown post-create, causing perpetual drift.
-    ignore_changes = [description]
-  }
-}
-
-resource "aws_bedrock_guardrail_version" "main" {
-  guardrail_arn = aws_bedrock_guardrail.main.guardrail_arn
-  description   = "Initial version"
-}
+# Guardrail is created and versioned by scripts/ensure_guardrail.sh (called from the
+# deploy workflow) because the hashicorp/aws provider returns unknown values for computed
+# attributes post-create, causing perpetual destroy/recreate cycles. The guardrail ID
+# and version are passed in as variables.
 
 resource "aws_bedrockagent_prompt" "classifier" {
   name = "${local.name_prefix}-classifier"
