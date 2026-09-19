@@ -5,10 +5,10 @@ resource "aws_sfn_state_machine" "pipeline" {
   role_arn = aws_iam_role.sfn.arn
 
   definition = templatefile("${path.module}/state_machine.json.tpl", {
-    classifier_lambda_arn  = aws_lambda_function.classifier.arn
-    extractor_lambda_arn   = aws_lambda_function.extractor.arn
-    validator_lambda_arn   = aws_lambda_function.validator.arn
-    renderer_lambda_arn    = aws_lambda_function.renderer.arn
+    classifier_lambda_arn   = aws_lambda_function.classifier.arn
+    extractor_lambda_arn    = aws_lambda_function.extractor.arn
+    validator_lambda_arn    = aws_lambda_function.validator.arn
+    renderer_lambda_arn     = aws_lambda_function.renderer.arn
     fail_handler_lambda_arn = aws_lambda_function.fail_handler.arn
   })
 
