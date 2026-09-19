@@ -1,2 +1,2 @@
-state_bucket_name = "your-project-tf-state"
-lock_table_name   = "your-project-tf-locks"
+state_bucket_name = "will-nash-bedrock-document-summary-tf-state"
+lock_table_name   = "will-nash-bedrock-document-summary-tf-locks"
