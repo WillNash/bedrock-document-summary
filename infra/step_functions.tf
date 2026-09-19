@@ -14,7 +14,7 @@ resource "aws_sfn_state_machine" "pipeline" {
 
   logging_configuration {
     log_destination        = "${aws_cloudwatch_log_group.step_functions.arn}:*"
-    include_execution_data = false
+    include_execution_data = false # intentionally false — execution input contains PHI document content
     level                  = "ERROR"
   }
 

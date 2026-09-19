@@ -8,4 +8,21 @@ locals {
     Environment = var.environment
     ManagedBy   = "terraform"
   })
+
+  alert_actions = length(var.alert_email) > 0 ? [aws_sns_topic.alerts[0].arn] : []
+
+  extraction_doc_types = toset([
+    "lab_result",
+    "doctors_notes",
+    "injury_doc",
+    "visit_assessment",
+    "psych_eval",
+  ])
+
+  xray_actions = [
+    "xray:PutTraceSegments",
+    "xray:PutTelemetryRecords",
+    "xray:GetSamplingRules",
+    "xray:GetSamplingTargets",
+  ]
 }

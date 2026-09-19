@@ -48,6 +48,10 @@ resource "aws_kms_key" "phi" {
   })
 
   tags = local.common_tags
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "aws_kms_alias" "phi" {

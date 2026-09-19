@@ -1,11 +1,19 @@
 resource "aws_s3_bucket" "uploads" {
   bucket = "${local.name_prefix}-uploads-${local.account_id}"
   tags   = local.common_tags
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "aws_s3_bucket" "summaries" {
   bucket = "${local.name_prefix}-summaries-${local.account_id}"
   tags   = local.common_tags
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "aws_s3_bucket" "frontend" {
@@ -90,6 +98,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "uploads" {
   rule {
     id     = "expire-uploads"
     status = "Enabled"
+    # prefix matches the key structure: uploads/{job_id}/{filename} written by api_presign
     filter {
       prefix = "uploads/"
     }
@@ -104,6 +113,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "summaries" {
   rule {
     id     = "expire-summaries"
     status = "Enabled"
+    # prefix matches the key structure: summaries/{job_id}/summary.txt written by renderer
     filter {
       prefix = "summaries/"
     }
@@ -126,7 +136,7 @@ resource "aws_s3_bucket_cors_configuration" "uploads" {
 }
 
 # S3 must invoke pipeline_starter Lambda — permission must be created first
-resource "aws_lambda_permission" "allow_s3_invoke_pipeline_starter" {
+resource "aws_lambda_permission" "s3_pipeline_starter" {
   statement_id  = "AllowS3Invoke"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.pipeline_starter.function_name
@@ -143,5 +153,5 @@ resource "aws_s3_bucket_notification" "upload_trigger" {
     filter_prefix       = "uploads/"
   }
 
-  depends_on = [aws_lambda_permission.allow_s3_invoke_pipeline_starter]
+  depends_on = [aws_lambda_permission.s3_pipeline_starter]
 }

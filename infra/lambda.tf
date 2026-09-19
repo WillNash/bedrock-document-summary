@@ -83,7 +83,9 @@ data "archive_file" "validator" {
   }
 }
 
-# Renderer: bundle templates/ alongside handler.py
+# Renderer: bundle templates/ alongside handler.py.
+# dynamic "source" iterates local.extraction_doc_types so adding a new doc
+# type is automatic once the type is added to that set in locals.tf.
 data "archive_file" "renderer" {
   type        = "zip"
   output_path = "${path.module}/lambda_packages/renderer.zip"
@@ -92,25 +94,13 @@ data "archive_file" "renderer" {
     content  = file("${path.module}/../lambda/renderer/handler.py")
     filename = "handler.py"
   }
-  source {
-    content  = file("${path.module}/../templates/lab_result.j2")
-    filename = "templates/lab_result.j2"
-  }
-  source {
-    content  = file("${path.module}/../templates/doctors_notes.j2")
-    filename = "templates/doctors_notes.j2"
-  }
-  source {
-    content  = file("${path.module}/../templates/injury_doc.j2")
-    filename = "templates/injury_doc.j2"
-  }
-  source {
-    content  = file("${path.module}/../templates/visit_assessment.j2")
-    filename = "templates/visit_assessment.j2"
-  }
-  source {
-    content  = file("${path.module}/../templates/psych_eval.j2")
-    filename = "templates/psych_eval.j2"
+
+  dynamic "source" {
+    for_each = local.extraction_doc_types
+    content {
+      content  = file("${path.module}/../templates/${source.value}.j2")
+      filename = "templates/${source.value}.j2"
+    }
   }
 }
 
@@ -151,9 +141,9 @@ resource "aws_lambda_function" "api_presign" {
     log_group  = aws_cloudwatch_log_group.lambda["api-presign"].name
   }
 
-  depends_on = [aws_cloudwatch_log_group.lambda]
-
   tags = local.common_tags
+
+  depends_on = [aws_cloudwatch_log_group.lambda]
 }
 
 resource "aws_lambda_function" "api_status" {
@@ -182,9 +172,9 @@ resource "aws_lambda_function" "api_status" {
     log_group  = aws_cloudwatch_log_group.lambda["api-status"].name
   }
 
-  depends_on = [aws_cloudwatch_log_group.lambda]
-
   tags = local.common_tags
+
+  depends_on = [aws_cloudwatch_log_group.lambda]
 }
 
 resource "aws_lambda_function" "api_summary" {
@@ -214,9 +204,9 @@ resource "aws_lambda_function" "api_summary" {
     log_group  = aws_cloudwatch_log_group.lambda["api-summary"].name
   }
 
-  depends_on = [aws_cloudwatch_log_group.lambda]
-
   tags = local.common_tags
+
+  depends_on = [aws_cloudwatch_log_group.lambda]
 }
 
 resource "aws_lambda_function" "pipeline_starter" {
@@ -246,9 +236,9 @@ resource "aws_lambda_function" "pipeline_starter" {
     log_group  = aws_cloudwatch_log_group.lambda["pipeline-starter"].name
   }
 
-  depends_on = [aws_cloudwatch_log_group.lambda]
-
   tags = local.common_tags
+
+  depends_on = [aws_cloudwatch_log_group.lambda]
 }
 
 resource "aws_lambda_function" "classifier" {
@@ -282,9 +272,9 @@ resource "aws_lambda_function" "classifier" {
     log_group  = aws_cloudwatch_log_group.lambda["classifier"].name
   }
 
-  depends_on = [aws_cloudwatch_log_group.lambda]
-
   tags = local.common_tags
+
+  depends_on = [aws_cloudwatch_log_group.lambda]
 }
 
 resource "aws_lambda_function" "extractor" {
@@ -318,9 +308,9 @@ resource "aws_lambda_function" "extractor" {
     log_group  = aws_cloudwatch_log_group.lambda["extractor"].name
   }
 
-  depends_on = [aws_cloudwatch_log_group.lambda]
-
   tags = local.common_tags
+
+  depends_on = [aws_cloudwatch_log_group.lambda]
 }
 
 resource "aws_lambda_function" "validator" {
@@ -344,9 +334,9 @@ resource "aws_lambda_function" "validator" {
     log_group  = aws_cloudwatch_log_group.lambda["validator"].name
   }
 
-  depends_on = [aws_cloudwatch_log_group.lambda]
-
   tags = local.common_tags
+
+  depends_on = [aws_cloudwatch_log_group.lambda]
 }
 
 resource "aws_lambda_function" "renderer" {
@@ -377,9 +367,9 @@ resource "aws_lambda_function" "renderer" {
     log_group  = aws_cloudwatch_log_group.lambda["renderer"].name
   }
 
-  depends_on = [aws_cloudwatch_log_group.lambda]
-
   tags = local.common_tags
+
+  depends_on = [aws_cloudwatch_log_group.lambda]
 }
 
 resource "aws_lambda_function" "fail_handler" {
@@ -408,7 +398,7 @@ resource "aws_lambda_function" "fail_handler" {
     log_group  = aws_cloudwatch_log_group.lambda["fail-handler"].name
   }
 
-  depends_on = [aws_cloudwatch_log_group.lambda]
-
   tags = local.common_tags
+
+  depends_on = [aws_cloudwatch_log_group.lambda]
 }

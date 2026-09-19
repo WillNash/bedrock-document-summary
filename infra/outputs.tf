@@ -52,3 +52,13 @@ output "state_machine_arn" {
   description = "Step Functions Express state machine ARN"
   value       = aws_sfn_state_machine.pipeline.arn
 }
+
+output "phi_kms_key_arn" {
+  description = "ARN of the PHI data encryption KMS key (S3 and DynamoDB)"
+  value       = aws_kms_key.phi.arn
+}
+
+output "pipeline_starter_dlq_url" {
+  description = "SQS URL for the pipeline_starter dead-letter queue"
+  value       = aws_sqs_queue.pipeline_starter_dlq.url
+}

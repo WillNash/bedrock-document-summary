@@ -49,28 +49,54 @@ variable "cognito_logout_urls" {
   default     = ["http://localhost:3000"]
 }
 
+variable "alert_email" {
+  type        = string
+  description = "Email address for operational and cost anomaly alerts. Leave empty to disable alerting."
+  default     = ""
+}
+
 variable "log_retention_days" {
   type        = number
   description = "CloudWatch log group retention in days"
   default     = 30
+
+  validation {
+    condition     = contains([1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653], var.log_retention_days)
+    error_message = "log_retention_days must be a valid CloudWatch retention period (1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653)."
+  }
 }
 
 variable "upload_max_size_bytes" {
   type        = number
   description = "Maximum allowed upload size in bytes for S3 presigned POST"
   default     = 10485760
+
+  validation {
+    condition     = var.upload_max_size_bytes > 0 && var.upload_max_size_bytes <= 5368709120
+    error_message = "upload_max_size_bytes must be between 1 and 5368709120 (5 GiB S3 single-PUT limit)."
+  }
 }
 
 variable "daily_upload_limit" {
   type        = number
   description = "Maximum documents a single user can upload per calendar day (UTC)"
   default     = 20
+
+  validation {
+    condition     = var.daily_upload_limit >= 1
+    error_message = "daily_upload_limit must be at least 1."
+  }
 }
 
 variable "processing_concurrency" {
   type        = number
   description = "Reserved concurrency for classifier and extractor Lambdas — caps simultaneous Bedrock calls across all users"
   default     = 5
+
+  validation {
+    condition     = var.processing_concurrency >= 1
+    error_message = "processing_concurrency must be at least 1."
+  }
 }
 
 variable "tags" {

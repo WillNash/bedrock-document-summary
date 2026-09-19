@@ -68,16 +68,6 @@ resource "aws_bedrock_prompt" "classifier" {
   tags            = local.common_tags
 }
 
-locals {
-  extraction_doc_types = toset([
-    "lab_result",
-    "doctors_notes",
-    "injury_doc",
-    "visit_assessment",
-    "psych_eval",
-  ])
-}
-
 resource "aws_bedrock_prompt" "extraction" {
   for_each = local.extraction_doc_types
   name     = "${local.name_prefix}-${replace(each.key, "_", "-")}"

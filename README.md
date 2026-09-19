@@ -109,25 +109,23 @@ Two GitHub Actions workflows are included:
 
 #### 1. Create Terraform state infrastructure
 
-Terraform needs a remote backend so state is shared between your machine and CI. Create an S3 bucket and a DynamoDB table for locking:
+Terraform needs a remote backend so state is shared between your machine and CI. The `bootstrap/` module creates the S3 bucket and DynamoDB lock table using local state — this is the one part of the infrastructure that has to exist before Terraform can manage anything else.
+
+Edit `bootstrap/terraform.tfvars` with names for your bucket and table (bucket names are globally unique):
+
+```hcl
+state_bucket_name = "your-project-tf-state"
+lock_table_name   = "your-project-tf-locks"
+```
+
+Then apply:
 
 ```bash
-# Replace the names — bucket names are globally unique
-aws s3api create-bucket \
-  --bucket your-project-tf-state \
-  --region us-east-1
-
-aws s3api put-bucket-versioning \
-  --bucket your-project-tf-state \
-  --versioning-configuration Status=Enabled
-
-aws dynamodb create-table \
-  --table-name your-project-tf-locks \
-  --attribute-definitions AttributeName=LockID,AttributeType=S \
-  --key-schema AttributeName=LockID,KeyType=HASH \
-  --billing-mode PAY_PER_REQUEST \
-  --region us-east-1
+terraform -chdir=bootstrap init
+terraform -chdir=bootstrap apply
 ```
+
+The `backend_hcl` output prints the exact content to paste into `infra/backend.hcl` in the next step. Commit `bootstrap/terraform.tfstate` — it contains only the bucket and table names, nothing sensitive, and lets you manage these resources with Terraform in future.
 
 #### 2. Create your local backend config
 
@@ -236,6 +234,7 @@ schemas/        JSON schemas for structured extraction (one per document type)
 templates/      Jinja2 summary templates (one per document type)
 prompts/        System prompts for classification and extraction
 infra/          Terraform — one .tf file per concern
+bootstrap/      Terraform module that creates the S3 state bucket and DynamoDB lock table (run once)
 scripts/        build_lambdas.sh, deploy_frontend.sh
 tests/          pytest unit tests
 frontend/       Vanilla JS SPA (config.js generated at deploy time)

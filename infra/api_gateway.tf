@@ -95,7 +95,7 @@ resource "aws_apigatewayv2_route" "summary" {
 # ── Lambda permissions for API Gateway ────────────────────────────────────────
 
 resource "aws_lambda_permission" "apigw_presign" {
-  statement_id  = "AllowAPIGatewayInvoke"
+  statement_id  = "AllowAPIGatewayInvokePresign"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.api_presign.function_name
   principal     = "apigateway.amazonaws.com"
@@ -103,7 +103,7 @@ resource "aws_lambda_permission" "apigw_presign" {
 }
 
 resource "aws_lambda_permission" "apigw_status" {
-  statement_id  = "AllowAPIGatewayInvoke"
+  statement_id  = "AllowAPIGatewayInvokeStatus"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.api_status.function_name
   principal     = "apigateway.amazonaws.com"
@@ -111,7 +111,7 @@ resource "aws_lambda_permission" "apigw_status" {
 }
 
 resource "aws_lambda_permission" "apigw_summary" {
-  statement_id  = "AllowAPIGatewayInvoke"
+  statement_id  = "AllowAPIGatewayInvokeSummary"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.api_summary.function_name
   principal     = "apigateway.amazonaws.com"

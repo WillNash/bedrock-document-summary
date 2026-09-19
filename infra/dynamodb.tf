@@ -43,4 +43,8 @@ resource "aws_dynamodb_table" "jobs" {
   }
 
   tags = local.common_tags
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }

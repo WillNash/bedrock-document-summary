@@ -1,6 +1,7 @@
 *.tfvars
 !terraform.tfvars.example
 !infra/terraform.tfvars
+!bootstrap/terraform.tfvars
 infra/backend.hcl
 *.zip
 .terraform/

@@ -18,17 +18,6 @@ data "aws_iam_policy_document" "sfn_trust" {
   }
 }
 
-# ── Shared policy snippets ───────────────────────────────────────────────────
-
-locals {
-  xray_actions = [
-    "xray:PutTraceSegments",
-    "xray:PutTelemetryRecords",
-    "xray:GetSamplingRules",
-    "xray:GetSamplingTargets",
-  ]
-}
-
 # ── api role (api_presign, api_status, api_summary) ──────────────────────────
 
 resource "aws_iam_role" "api" {
@@ -67,8 +56,12 @@ resource "aws_iam_role_policy" "api_dynamodb" {
         "dynamodb:PutItem",
         "dynamodb:GetItem",
         "dynamodb:UpdateItem",
+        "dynamodb:Query",
       ]
-      Resource = aws_dynamodb_table.jobs.arn
+      Resource = [
+        aws_dynamodb_table.jobs.arn,
+        "${aws_dynamodb_table.jobs.arn}/index/*",
+      ]
     }]
   })
 }
@@ -255,9 +248,12 @@ resource "aws_iam_role_policy" "processing_bedrock_runtime" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect   = "Allow"
-      Action   = ["bedrock:InvokeModel"]
-      Resource = "*"
+      Effect = "Allow"
+      Action = ["bedrock:InvokeModel"]
+      Resource = [
+        "arn:aws:bedrock:${local.region}:${local.account_id}:inference-profile/${var.bedrock_model_id}",
+        "arn:aws:bedrock:${local.region}:${local.account_id}:inference-profile/${var.bedrock_classifier_model_id}",
+      ]
     }]
   })
 }

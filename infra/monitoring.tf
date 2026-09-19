@@ -1,13 +1,3 @@
-variable "alert_email" {
-  type        = string
-  description = "Email address for operational and cost anomaly alerts"
-  default     = ""
-}
-
-locals {
-  alert_actions = length(var.alert_email) > 0 ? [aws_sns_topic.alerts[0].arn] : []
-}
-
 # ── Pipeline failure alarms ───────────────────────────────────────────────────
 
 # Express Workflows do NOT emit ExecutionsFailed — use fail_handler invocations instead.
@@ -205,6 +195,7 @@ resource "aws_ce_anomaly_subscription" "alerts" {
 resource "aws_sqs_queue" "pipeline_starter_dlq" {
   name                      = "${local.name_prefix}-pipeline-starter-dlq"
   message_retention_seconds = 1209600 # 14 days
+  sqs_managed_sse_enabled   = true
   tags                      = local.common_tags
 }
 
