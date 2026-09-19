@@ -35,6 +35,11 @@ resource "aws_bedrock_guardrail" "main" {
   }
 
   tags = local.common_tags
+
+  lifecycle {
+    # Provider bug: description is returned as unknown post-create, causing perpetual drift.
+    ignore_changes = [description]
+  }
 }
 
 resource "aws_bedrock_guardrail_version" "main" {
