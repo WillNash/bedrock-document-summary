@@ -50,7 +50,7 @@ jobs:
         run: ./scripts/build_lambdas.sh
 
       - name: Terraform Init
-        run: terraform -chdir=infra init -backend-config=backend.hcl
+        run: terraform -chdir=infra init -backend-config=backend.hcl -input=false
 
       - name: Terraform Format Check
         run: terraform -chdir=infra fmt -check -recursive
