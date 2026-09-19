@@ -21,7 +21,7 @@ resource "aws_bedrock_guardrail" "main" {
       action = "ANONYMIZE"
     }
     pii_entities_config {
-      type   = "US_SSN"
+      type   = "US_SOCIAL_SECURITY_NUMBER"
       action = "ANONYMIZE"
     }
     pii_entities_config {

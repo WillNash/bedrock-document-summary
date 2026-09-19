@@ -181,6 +181,8 @@ resource "aws_ce_anomaly_subscription" "alerts" {
         values        = ["50"]
         match_options = ["GREATER_THAN_OR_EQUAL"]
       }
+    }
+    and {
       dimension {
         key           = "ANOMALY_TOTAL_IMPACT_ABSOLUTE"
         values        = ["10"]
