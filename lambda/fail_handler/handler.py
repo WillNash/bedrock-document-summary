@@ -1,12 +1,16 @@
 import boto3
+import contextlib
 import json
 import logging
 import os
+from typing import Final
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 dynamodb = boto3.resource('dynamodb')
+
+ERROR_MESSAGE_MAX_LEN: Final = 1000
 
 
 def lambda_handler(event, context):
@@ -19,12 +23,10 @@ def lambda_handler(event, context):
 
     # Cause is often a JSON-encoded string with errorMessage inside
     error_message = cause
-    try:
+    with contextlib.suppress(json.JSONDecodeError, TypeError):
         cause_obj = json.loads(cause)
         if isinstance(cause_obj, dict):
             error_message = cause_obj.get('errorMessage', cause)
-    except (json.JSONDecodeError, TypeError):
-        pass
 
     table = dynamodb.Table(os.environ['JOBS_TABLE'])
     table.update_item(
@@ -33,9 +35,9 @@ def lambda_handler(event, context):
         ExpressionAttributeNames={'#s': 'status'},
         ExpressionAttributeValues={
             ':s': 'FAILED',
-            ':e': str(error_message)[:1000],
+            ':e': str(error_message)[:ERROR_MESSAGE_MAX_LEN],
         },
     )
 
-    logger.info({'job_id': job_id, 'status': 'FAILED', 'action': 'failure_recorded'})
+    logger.info(json.dumps({'job_id': job_id, 'status': 'FAILED', 'action': 'failure_recorded'}))
     return {'job_id': job_id, 'status': 'FAILED'}

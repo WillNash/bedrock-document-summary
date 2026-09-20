@@ -72,7 +72,7 @@ def lambda_handler(event, context):
         },
     )
 
-    logger.info({'job_id': job_id, 'doc_type': doc_type, 'action': 'rendered', 'summary_key': summary_key})
+    logger.info(json.dumps({'job_id': job_id, 'doc_type': doc_type, 'action': 'rendered', 'summary_key': summary_key}))
 
     return {
         'job_id': job_id,

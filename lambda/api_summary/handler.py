@@ -12,6 +12,11 @@ dynamodb = boto3.resource('dynamodb')
 s3_client = boto3.client('s3')
 
 
+def _read_s3_text(bucket: str, key: str) -> str:
+    response = s3_client.get_object(Bucket=bucket, Key=key)
+    return response['Body'].read().decode('utf-8')
+
+
 def lambda_handler(event, context):
     claims = event['requestContext']['authorizer']['jwt']['claims']
     user_id = claims['sub']
@@ -42,11 +47,10 @@ def lambda_handler(event, context):
     summary_key = f'summaries/{job_id}/summary.txt'
 
     try:
-        s3_response = s3_client.get_object(Bucket=summaries_bucket, Key=summary_key)
-        summary_text = s3_response['Body'].read().decode('utf-8')
+        summary_text = _read_s3_text(summaries_bucket, summary_key)
     except ClientError as e:
         if e.response['Error']['Code'] == 'NoSuchKey':
-            logger.error({'job_id': job_id, 'error': 'Summary file missing from S3'})
+            logger.error(json.dumps({'job_id': job_id, 'error': 'Summary file missing from S3'}))
             return {
                 'statusCode': 500,
                 'headers': {'Content-Type': 'application/json'},
@@ -54,10 +58,9 @@ def lambda_handler(event, context):
             }
         raise
 
-    usage_stats = {}
+    usage_stats: dict = {}
     try:
-        usage_response = s3_client.get_object(Bucket=summaries_bucket, Key=f'summaries/{job_id}/usage.json')
-        usage_stats = json.loads(usage_response['Body'].read().decode('utf-8'))
+        usage_stats = json.loads(_read_s3_text(summaries_bucket, f'summaries/{job_id}/usage.json'))
     except ClientError as e:
         if e.response['Error']['Code'] != 'NoSuchKey':
             raise

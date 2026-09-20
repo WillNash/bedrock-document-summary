@@ -20,7 +20,7 @@ def lambda_handler(event, context):
         # Key pattern: uploads/{job_id}/{filename}
         parts = key.split('/')
         if len(parts) < 3 or parts[0] != 'uploads':
-            logger.warning({'action': 'skip_unexpected_key', 'key': key})
+            logger.warning(json.dumps({'action': 'skip_unexpected_key', 'key': key}))
             continue
 
         job_id = parts[1]
@@ -39,13 +39,13 @@ def lambda_handler(event, context):
                 name=job_id,
                 input=execution_input,
             )
-            logger.info({'job_id': job_id, 'action': 'execution_started', 'key': key})
+            logger.info(json.dumps({'job_id': job_id, 'action': 'execution_started', 'key': key}))
         except ClientError as e:
             if e.response['Error']['Code'] == 'ExecutionAlreadyExists':
                 # S3 event retry — execution is already running. Fall through
                 # to the DynamoDB update below in case the first delivery's
                 # write failed before completing.
-                logger.info({'job_id': job_id, 'action': 'execution_already_exists'})
+                logger.info(json.dumps({'job_id': job_id, 'action': 'execution_already_exists'}))
             else:
                 raise
 
@@ -64,7 +64,7 @@ def lambda_handler(event, context):
         except ClientError as e:
             if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
                 # Status has already been updated past PENDING — nothing to do.
-                logger.info({'job_id': job_id, 'action': 'status_already_progressed'})
+                logger.info(json.dumps({'job_id': job_id, 'action': 'status_already_progressed'}))
             else:
                 raise
 

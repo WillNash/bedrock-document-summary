@@ -33,7 +33,7 @@ def lambda_handler(event, context):
     schema = _load_schema(doc_type)
     jsonschema.validate(instance=extracted_data, schema=schema)
 
-    logger.info({'job_id': job_id, 'doc_type': doc_type, 'action': 'validated'})
+    logger.info(json.dumps({'job_id': job_id, 'doc_type': doc_type, 'action': 'validated'}))
 
     return {
         'job_id': job_id,

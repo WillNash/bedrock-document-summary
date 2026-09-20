@@ -21,10 +21,21 @@ bedrock_agent = boto3.client('bedrock-agent')
 bedrock_runtime = boto3.client('bedrock-runtime')
 s3_client = boto3.client('s3')
 
+# Parsed once per Lambda execution context (cold start), not per invocation.
+_PROMPT_ARNS: dict[str, str] | None = None
+_PROMPT_VERSIONS: dict[str, str] | None = None
+
+
+def _get_prompt_config() -> tuple[dict[str, str], dict[str, str]]:
+    global _PROMPT_ARNS, _PROMPT_VERSIONS
+    if _PROMPT_ARNS is None:
+        _PROMPT_ARNS = json.loads(os.environ['PROMPT_ARNS_JSON'])
+        _PROMPT_VERSIONS = json.loads(os.environ['PROMPT_VERSIONS_JSON'])
+    return _PROMPT_ARNS, _PROMPT_VERSIONS
+
 
 def _get_prompt_text(doc_type):
-    arns = json.loads(os.environ['PROMPT_ARNS_JSON'])
-    versions = json.loads(os.environ['PROMPT_VERSIONS_JSON'])
+    arns, versions = _get_prompt_config()
     prompt_arn = arns[doc_type]
     prompt_version = versions[doc_type]
     response = bedrock_agent.get_prompt(
@@ -102,7 +113,7 @@ def lambda_handler(event, context):
     extracted_data = tool_use_block['input']
 
     usage = response.get('usage', {})
-    logger.info({'job_id': job_id, 'doc_type': doc_type, 'action': 'extracted'})
+    logger.info(json.dumps({'job_id': job_id, 'doc_type': doc_type, 'action': 'extracted'}))
 
     return {
         'job_id': job_id,

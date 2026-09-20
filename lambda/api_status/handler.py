@@ -28,16 +28,12 @@ def lambda_handler(event, context):
             'body': json.dumps({'error': 'Job not found'}),
         }
 
+    optional_keys = ('doc_type', 'error_message', 'completed_at')
     payload = {
         'job_id': item['job_id'],
         'status': item['status'],
+        **{k: item[k] for k in optional_keys if k in item},
     }
-    if 'doc_type' in item:
-        payload['doc_type'] = item['doc_type']
-    if 'error_message' in item:
-        payload['error_message'] = item['error_message']
-    if 'completed_at' in item:
-        payload['completed_at'] = item['completed_at']
 
     return {
         'statusCode': 200,

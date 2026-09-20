@@ -45,8 +45,7 @@ SAMPLE_USAGE = {
 
 def s3_side_effect(summary_text='Patient summary here.'):
     """Return a side_effect list: summary.txt first, usage.json second."""
-    import json as _json
-    return [make_s3_body(summary_text), make_s3_body(_json.dumps(SAMPLE_USAGE))]
+    return [make_s3_body(summary_text), make_s3_body(json.dumps(SAMPLE_USAGE))]
 
 
 @pytest.fixture(autouse=True)

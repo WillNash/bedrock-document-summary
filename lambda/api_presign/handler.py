@@ -4,6 +4,8 @@ import logging
 import os
 import uuid
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
+from typing import Final
 
 from botocore.config import Config
 from botocore.exceptions import ClientError
@@ -16,6 +18,8 @@ s3_client = boto3.client(
     's3',
     config=Config(signature_version='s3v4', s3={'addressing_style': 'virtual'})
 )
+
+PRESIGN_TTL_SECONDS: Final = 300
 
 
 def _check_and_increment_quota(table, user_id, limit):
@@ -51,7 +55,7 @@ def lambda_handler(event, context):
     body = json.loads(event.get('body') or '{}')
     filename = body.get('filename', 'document.txt')
     # Sanitize filename: strip path components
-    filename = os.path.basename(filename) or 'document.txt'
+    filename = Path(filename).name or 'document.txt'
 
     upload_bucket = os.environ['UPLOAD_BUCKET']
     jobs_table = os.environ['JOBS_TABLE']
@@ -61,7 +65,7 @@ def lambda_handler(event, context):
     table = dynamodb.Table(jobs_table)
 
     if not _check_and_increment_quota(table, user_id, daily_limit):
-        logger.warning({'user_id': user_id, 'action': 'quota_exceeded', 'limit': daily_limit})
+        logger.warning(json.dumps({'user_id': user_id, 'action': 'quota_exceeded', 'limit': daily_limit}))
         return {
             'statusCode': 429,
             'headers': {'Content-Type': 'application/json'},
@@ -91,10 +95,10 @@ def lambda_handler(event, context):
             ['starts-with', '$Content-Type', ''],
             ['content-length-range', 1, max_size],
         ],
-        ExpiresIn=300,
+        ExpiresIn=PRESIGN_TTL_SECONDS,
     )
 
-    logger.info({'job_id': job_id, 'user_id': user_id, 'action': 'presign_created'})
+    logger.info(json.dumps({'job_id': job_id, 'user_id': user_id, 'action': 'presign_created'}))
 
     return {
         'statusCode': 200,

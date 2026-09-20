@@ -65,7 +65,7 @@ def lambda_handler(event, context):
         raise ValueError(f'Classifier returned unknown doc type: {raw_label!r}')
 
     usage = response.get('usage', {})
-    logger.info({'job_id': job_id, 'doc_type': raw_label, 'action': 'classified'})
+    logger.info(json.dumps({'job_id': job_id, 'doc_type': raw_label, 'action': 'classified'}))
 
     return {
         'job_id': job_id,
