@@ -136,7 +136,19 @@ function buildRunGrid(n) {
     tile.innerHTML = `<span class="run-num">Run ${i}</span><span class="run-status">queued</span>`;
     grid.appendChild(tile);
   }
+  const log = document.getElementById('error-log');
+  log.innerHTML = '';
+  log.classList.add('hidden');
   document.getElementById('progress-panel').classList.remove('hidden');
+}
+
+function logRunError(num, message) {
+  const log = document.getElementById('error-log');
+  log.classList.remove('hidden');
+  const entry = document.createElement('p');
+  entry.className = 'run-error-entry';
+  entry.textContent = `Run ${String(num).padStart(2, '0')} failed: ${message}`;
+  log.appendChild(entry);
 }
 
 const STATUS_CLASS = {
@@ -170,7 +182,10 @@ async function submitJob(file, runNum) {
     body: JSON.stringify({ filename: file.name }),
   });
   if (presignRes.status === 401) throw new Error('auth');
-  if (!presignRes.ok) throw new Error(`presign failed (run ${runNum})`);
+  if (!presignRes.ok) {
+    const detail = await presignRes.json().catch(() => ({}));
+    throw new Error(`presign HTTP ${presignRes.status}: ${detail.error || 'unknown error'}`);
+  }
 
   const { job_id, presign_url, presign_fields } = await presignRes.json();
 
@@ -328,17 +343,21 @@ async function runConsistencyTest() {
   buildRunGrid(n);
   setHeader(`Submitting ${n} upload${n > 1 ? 's' : ''}…`);
 
-  // Submit all N jobs in parallel; auth failures abort everything, upload failures mark that run failed
+  // Stagger submissions by 200 ms to avoid concurrent writes to the same DynamoDB quota item.
+  // Jobs still poll in parallel — the stagger only affects the presign step.
   let jobIds;
   try {
     jobIds = await Promise.all(
       results.map((r, i) =>
-        submitJob(file, i + 1).catch(err => {
-          if (err.message === 'auth') throw err;
-          r.error = err.message;
-          updateRunTile(i + 1, 'failed');
-          return null;
-        })
+        new Promise(resolve => setTimeout(resolve, i * 200))
+          .then(() => submitJob(file, i + 1))
+          .catch(err => {
+            if (err.message === 'auth') throw err;
+            r.error = err.message;
+            updateRunTile(i + 1, 'failed');
+            logRunError(i + 1, err.message);
+            return null;
+          })
       )
     );
   } catch (err) {
@@ -367,6 +386,7 @@ async function runConsistencyTest() {
           if (err.message !== 'auth') {
             results[i].error = err.message;
             updateRunTile(i + 1, 'failed');
+            logRunError(i + 1, err.message);
           }
         });
     })

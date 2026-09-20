@@ -224,6 +224,21 @@ h2 {
   opacity: 0.7;
 }
 
+#error-log {
+  margin-top: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: #ffe3e3;
+  border: 1px solid #f5c6cb;
+  border-radius: 8px;
+}
+
+.run-error-entry {
+  font-size: 0.85rem;
+  color: #c92a2a;
+  font-family: 'Courier New', monospace;
+  margin: 0.2rem 0;
+}
+
 .run-tile.queued     { background: #f1f3f5; color: #6c757d; }
 .run-tile.uploading  { background: #e7f5ff; color: #1971c2; }
 .run-tile.pending,
