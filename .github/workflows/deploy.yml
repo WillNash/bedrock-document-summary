@@ -37,11 +37,13 @@ jobs:
         run: terraform -chdir=infra init -backend-config=backend.hcl -input=false
 
       - name: Remove guardrail from state
-        # Provider bug causes perpetual destroy/recreate — guardrail is managed via CLI.
-        # Silently succeeds even if the resources are not in state.
+        # The AWS provider has a bug causing aws_bedrock_guardrail to perpetually
+        # destroy/recreate, so it was moved out of Terraform and into ensure_guardrail.sh.
+        # These lines evict it from state on deployments that still have it; they are
+        # silent no-ops on clean state.
         run: |
-          terraform -chdir=infra state rm aws_bedrock_guardrail.main || true
-          terraform -chdir=infra state rm aws_bedrock_guardrail_version.main || true
+          terraform -chdir=infra state rm aws_bedrock_guardrail.main 2>/dev/null || true
+          terraform -chdir=infra state rm aws_bedrock_guardrail_version.main 2>/dev/null || true
 
       - name: Ensure Bedrock guardrail
         run: ./scripts/ensure_guardrail.sh >> $GITHUB_ENV

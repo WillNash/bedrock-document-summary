@@ -137,7 +137,9 @@ h2 {
 
 .signout-row {
   margin-top: 1.5rem;
-  text-align: right;
+  display: flex;
+  justify-content: flex-end;
+  gap: 1rem;
 }
 
 #auth-section p { color: #495057; margin-bottom: 1rem; }
