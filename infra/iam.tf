@@ -251,8 +251,8 @@ resource "aws_iam_role_policy" "processing_bedrock_runtime" {
       Effect = "Allow"
       Action = ["bedrock:InvokeModel"]
       Resource = [
-        "arn:aws:bedrock:${local.region}:${local.account_id}:inference-profile/${var.bedrock_model_id}",
-        "arn:aws:bedrock:${local.region}:${local.account_id}:inference-profile/${var.bedrock_classifier_model_id}",
+        "arn:aws:bedrock:${local.region}::foundation-model/${var.bedrock_model_id}",
+        "arn:aws:bedrock:${local.region}::foundation-model/${var.bedrock_classifier_model_id}",
       ]
     }]
   })
