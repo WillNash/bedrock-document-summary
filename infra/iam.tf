@@ -255,7 +255,7 @@ resource "aws_iam_role_policy" "processing_bedrock_runtime" {
       },
       {
         Effect   = "Allow"
-        Action   = ["aws-marketplace:ViewSubscriptions"]
+        Action   = ["aws-marketplace:ViewSubscriptions", "aws-marketplace:Subscribe"]
         Resource = ["*"]
       },
     ]
