@@ -272,6 +272,20 @@ resource "aws_iam_role_policy" "processing_bedrock_prompt" {
   })
 }
 
+resource "aws_iam_role_policy" "processing_bedrock_guardrail" {
+  name = "bedrock-guardrail"
+  role = aws_iam_role.processing.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["bedrock:ApplyGuardrail"]
+      Resource = "arn:aws:bedrock:${local.region}:${local.account_id}:guardrail/${var.guardrail_id}"
+    }]
+  })
+}
+
 resource "aws_iam_role_policy" "processing_kms" {
   name = "kms-phi"
   role = aws_iam_role.processing.id
