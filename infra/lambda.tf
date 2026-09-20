@@ -2,6 +2,7 @@
 # Run scripts/build_lambdas.sh before terraform apply to create this file.
 resource "aws_lambda_layer_version" "deps" {
   filename                 = "${path.module}/lambda_packages/layer.zip"
+  source_code_hash         = filebase64sha256("${path.module}/lambda_packages/layer.zip")
   layer_name               = "${local.name_prefix}-deps"
   compatible_runtimes      = ["python3.12"]
   compatible_architectures = ["arm64"]
