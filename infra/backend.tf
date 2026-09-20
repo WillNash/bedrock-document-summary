@@ -1,8 +1,7 @@
 terraform {
   backend "s3" {
-    # Config is supplied via infra/backend.hcl (gitignored).
-    # Copy infra/backend.hcl.example → infra/backend.hcl and fill in values,
-    # then: terraform -chdir=infra init -backend-config=backend.hcl
+    # Config is supplied at init time via -backend-config=backend.hcl.
+    # In CI/CD this is written from the TF_BACKEND_CONFIG GitHub secret.
     encrypt = true
   }
 }

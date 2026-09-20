@@ -8,24 +8,6 @@ Medical document summarization pipeline on AWS. Users upload documents (lab resu
 
 ## Commands
 
-### Build and deploy
-
-```bash
-# 1. Build Lambda layer (jinja2, jsonschema) — required before every terraform apply
-./scripts/build_lambdas.sh
-
-# 2. First-time infrastructure deploy (localhost Cognito callback URLs)
-terraform -chdir=infra init
-terraform -chdir=infra apply
-
-# 3. Deploy frontend (reads Terraform outputs, writes config.js, syncs to S3)
-./scripts/deploy_frontend.sh
-
-# 4. Update Cognito callback URLs to real CloudFront URL, then re-apply
-#    Edit terraform.tfvars: cognito_callback_urls and cognito_logout_urls
-terraform -chdir=infra apply
-```
-
 ### Tests
 
 ```bash
@@ -98,8 +80,4 @@ All four processing states (ClassifyDocument, ExtractData, ValidateData, RenderS
 
 ### Frontend (`frontend/`)
 
-Vanilla JS PKCE flow. Tokens stored in `sessionStorage`. `config.js` is generated at deploy time by `scripts/deploy_frontend.sh` — it is not committed and is not present until after first deploy.
-
-### Cognito two-step deploy
-
-First apply uses `http://localhost:3000/callback` defaults. After `deploy_frontend.sh` runs and outputs the CloudFront URL, update `terraform.tfvars` with the real URL and re-apply. Only the Cognito App Client is changed on the second apply.
+Vanilla JS PKCE flow. Tokens stored in `localStorage` with silent refresh via the Cognito token endpoint. `config.js` is generated at deploy time by `scripts/deploy_frontend.sh` — it is not committed and is not present until after first deploy.

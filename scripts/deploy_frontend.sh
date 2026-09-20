@@ -44,8 +44,3 @@ echo "==> Frontend deployed."
 echo ""
 CLOUDFRONT_URL=$(terraform -chdir="$INFRA_DIR" output -raw cloudfront_url)
 echo "App URL: https://${CLOUDFRONT_URL}"
-echo ""
-echo "Next step: Update cognito_callback_urls and cognito_logout_urls in terraform.tfvars"
-echo "  cognito_callback_urls = [\"https://${CLOUDFRONT_URL}/callback\"]"
-echo "  cognito_logout_urls   = [\"https://${CLOUDFRONT_URL}\"]"
-echo "Then run: terraform -chdir=infra apply"

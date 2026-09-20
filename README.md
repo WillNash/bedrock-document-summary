@@ -29,73 +29,6 @@ Browser (PKCE) → Cognito → API Gateway → api_presign Lambda
 
 **AWS services:** Lambda (Python 3.12, arm64), Step Functions Express, S3, DynamoDB, API Gateway v2, CloudFront, Cognito, Bedrock (Claude Sonnet for extraction, Haiku for classification), Bedrock Prompt Management, WAF, KMS, X-Ray, CloudWatch.
 
-## Prerequisites
-
-- AWS CLI configured with credentials for the target account
-- Terraform >= 1.6
-- Python 3.12 and pip (for building the Lambda layer)
-- Bedrock model access enabled in your account for Claude Sonnet and Haiku
-
-## Deploy
-
-### 1. Build the Lambda layer
-
-```bash
-./scripts/build_lambdas.sh
-```
-
-Creates `infra/lambda_packages/layer.zip` with `jinja2` and `jsonschema`. Must be run before every `terraform apply`.
-
-### 2. Configure
-
-```bash
-cp infra/terraform.tfvars.example infra/terraform.tfvars
-cp infra/backend.hcl.example infra/backend.hcl
-```
-
-Edit `terraform.tfvars`. The only required variable is `project_name`. Key options:
-
-| Variable | Default | Notes |
-|---|---|---|
-| `project_name` | *(required)* | Used as a prefix for all resource names |
-| `aws_region` | `us-east-1` | Target deployment region |
-| `environment` | `prod` | |
-| `bedrock_model_id` | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` | Must use a geo/global prefix |
-| `bedrock_classifier_model_id` | `us.anthropic.claude-haiku-4-5-20251001-v1:0` | Must use a geo/global prefix |
-| `alert_email` | *(unset)* | Email for CloudWatch alarms and cost anomaly alerts |
-
-### 3. First apply
-
-```bash
-terraform -chdir=infra init -backend-config=backend.hcl
-terraform -chdir=infra apply
-```
-
-Leave `cognito_callback_urls` at the localhost default for now.
-
-### 4. Deploy the frontend
-
-```bash
-./scripts/deploy_frontend.sh
-```
-
-Reads Terraform outputs, generates `frontend/config.js`, syncs assets to S3, and invalidates the CloudFront cache. Prints the live URL when done.
-
-### 5. Update Cognito callback URLs
-
-Edit `terraform.tfvars` with the CloudFront URL from the previous step:
-
-```hcl
-cognito_callback_urls = ["https://<your-cloudfront-domain>/callback"]
-cognito_logout_urls   = ["https://<your-cloudfront-domain>"]
-```
-
-Then apply again — only the Cognito App Client is updated:
-
-```bash
-terraform -chdir=infra apply
-```
-
 ## CI/CD
 
 Two GitHub Actions workflows are included:
@@ -109,9 +42,9 @@ Two GitHub Actions workflows are included:
 
 #### 1. Create Terraform state infrastructure
 
-Terraform needs a remote backend so state is shared between your machine and CI. The `bootstrap/` module creates the S3 bucket and DynamoDB lock table using local state — this is the one part of the infrastructure that has to exist before Terraform can manage anything else.
+The `bootstrap/` module creates the S3 bucket and DynamoDB lock table that Terraform uses as its remote backend. This must exist before CI/CD can run.
 
-Edit `bootstrap/terraform.tfvars` with names for your bucket and table (bucket names are globally unique):
+Edit `bootstrap/terraform.tfvars` with names for your bucket and table:
 
 ```hcl
 state_bucket_name = "your-project-tf-state"
@@ -125,61 +58,21 @@ terraform -chdir=bootstrap init
 terraform -chdir=bootstrap apply
 ```
 
-The `backend_hcl` output prints the exact content to paste into `infra/backend.hcl` in the next step. Commit `bootstrap/terraform.tfstate` — it contains only the bucket and table names, nothing sensitive, and lets you manage these resources with Terraform in future.
+The `backend_hcl` output prints the exact content needed for the next step. Commit `bootstrap/terraform.tfstate` — it contains only bucket and table names, nothing sensitive.
 
-#### 2. Create your local backend config
-
-```bash
-cp infra/backend.hcl.example infra/backend.hcl
-```
-
-Edit `infra/backend.hcl` with the bucket and table names you just created:
-
-```hcl
-bucket         = "your-project-tf-state"
-key            = "bedrock-doc-summary/terraform.tfstate"
-region         = "us-east-1"
-dynamodb_table = "your-project-tf-locks"
-```
-
-`backend.hcl` is gitignored — it stays on your machine and in GitHub secrets only.
-
-#### 3. Migrate local state to S3
-
-If you have existing local state (from a previous `terraform apply`), reinitialise to migrate it:
-
-```bash
-terraform -chdir=infra init -backend-config=backend.hcl -migrate-state
-```
-
-If this is a fresh repo with no prior state, omit `-migrate-state`:
-
-```bash
-terraform -chdir=infra init -backend-config=backend.hcl
-```
-
-#### 4. Commit terraform.tfvars
-
-`infra/terraform.tfvars` is tracked by git (none of its values are sensitive). If you haven't committed it yet:
-
-```bash
-git add infra/terraform.tfvars
-git commit -m "add terraform.tfvars"
-```
-
-#### 5. Add GitHub secrets
+#### 2. Add GitHub secrets
 
 Go to **Settings → Secrets and variables → Actions** in your GitHub repository and add:
 
 | Secret | Value |
 |---|---|
-| `AWS_ACCESS_KEY_ID` | Access key ID for a CI IAM user |
+| `AWS_ACCESS_KEY_ID` | Access key ID for the CI IAM user |
 | `AWS_SECRET_ACCESS_KEY` | Secret access key for that user |
-| `TF_BACKEND_CONFIG` | The full contents of your `infra/backend.hcl` |
+| `TF_BACKEND_CONFIG` | Contents of `infra/backend.hcl` (S3 bucket, DynamoDB table, region, key) |
 
-The IAM user needs permissions to create, update, and delete all resources in the stack (Lambda, S3, DynamoDB, API Gateway, CloudFront, Cognito, Step Functions, Bedrock, WAF, KMS, IAM roles, CloudWatch, SQS, SNS). Using `AdministratorAccess` is the easiest starting point; scope it down to least-privilege once the stack is stable.
+The IAM user needs permissions to create, update, and delete all resources in the stack (Lambda, S3, DynamoDB, API Gateway, CloudFront, Cognito, Step Functions, Bedrock, WAF, KMS, IAM roles, CloudWatch, SQS, SNS).
 
-#### 6. Optionally configure the production environment
+#### 3. Optionally configure the production environment
 
 The deploy workflow runs in a GitHub environment called `production`. If you want to require a manual approval before every deploy:
 
@@ -234,10 +127,10 @@ schemas/        JSON schemas for structured extraction (one per document type)
 templates/      Jinja2 summary templates (one per document type)
 prompts/        System prompts for classification and extraction
 infra/          Terraform — one .tf file per concern
-bootstrap/      Terraform module that creates the S3 state bucket and DynamoDB lock table (run once)
-scripts/        build_lambdas.sh, deploy_frontend.sh
+bootstrap/      Terraform module that creates the S3 state bucket and DynamoDB lock table (run once to enable CI/CD)
+scripts/        build_lambdas.sh, deploy_frontend.sh, ensure_guardrail.sh (all called by CI/CD)
 tests/          pytest unit tests
-frontend/       Vanilla JS SPA (config.js generated at deploy time)
+frontend/       Vanilla JS SPA (config.js generated at deploy time by deploy_frontend.sh)
 ```
 
 ### Adding a document type
