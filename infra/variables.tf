@@ -17,13 +17,8 @@ variable "environment" {
 
 variable "bedrock_model_id" {
   type        = string
-  description = "Bedrock inference profile ID for extraction and rendering. Must use a geo or global prefix."
-  default     = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
-
-  validation {
-    condition     = can(regex("^(us\\.|eu\\.|au\\.|jp\\.|global\\.)", var.bedrock_model_id))
-    error_message = "bedrock_model_id must start with a geo or global prefix: us., eu., au., jp., or global. Do not use bare model IDs (e.g. anthropic.claude-*) — they will fail at runtime."
-  }
+  description = "Bedrock model or inference profile ID for extraction and rendering. Use a geo-prefixed cross-region inference profile (us., eu., etc.) when available; use the bare model ID (anthropic.claude-*) for models that don't yet have a cross-region profile."
+  default     = "anthropic.claude-sonnet-4-6"
 }
 
 variable "bedrock_classifier_model_id" {
