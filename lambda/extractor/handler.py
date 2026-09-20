@@ -101,6 +101,7 @@ def lambda_handler(event, context):
 
     extracted_data = tool_use_block['input']
 
+    usage = response.get('usage', {})
     logger.info({'job_id': job_id, 'doc_type': doc_type, 'action': 'extracted'})
 
     return {
@@ -109,4 +110,12 @@ def lambda_handler(event, context):
         'key': key,
         'doc_type': doc_type,
         'extracted_data': extracted_data,
+        'usage_stats': {
+            **event.get('usage_stats', {}),
+            'extractor': {
+                'model': model_id,
+                'input_tokens': usage.get('inputTokens', 0),
+                'output_tokens': usage.get('outputTokens', 0),
+            },
+        },
     }

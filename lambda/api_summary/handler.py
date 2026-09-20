@@ -54,6 +54,14 @@ def lambda_handler(event, context):
             }
         raise
 
+    usage_stats = {}
+    try:
+        usage_response = s3_client.get_object(Bucket=summaries_bucket, Key=f'summaries/{job_id}/usage.json')
+        usage_stats = json.loads(usage_response['Body'].read().decode('utf-8'))
+    except ClientError as e:
+        if e.response['Error']['Code'] != 'NoSuchKey':
+            raise
+
     return {
         'statusCode': 200,
         'headers': {'Content-Type': 'application/json'},
@@ -61,5 +69,6 @@ def lambda_handler(event, context):
             'job_id': job_id,
             'doc_type': item.get('doc_type', 'unknown'),
             'summary': summary_text,
+            'usage': usage_stats,
         }),
     }

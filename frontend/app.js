@@ -45,18 +45,57 @@ function isTokenExpired(token) {
 }
 
 function getStoredToken() {
-  return sessionStorage.getItem('id_token');
+  return localStorage.getItem('id_token');
 }
 
 function storeTokens(tokens) {
-  sessionStorage.setItem('id_token', tokens.id_token);
-  sessionStorage.setItem('access_token', tokens.access_token);
+  localStorage.setItem('id_token', tokens.id_token);
+  localStorage.setItem('access_token', tokens.access_token);
+  // Refresh token is only returned on initial auth, not on refresh grants
+  if (tokens.refresh_token) {
+    localStorage.setItem('refresh_token', tokens.refresh_token);
+  }
 }
 
 function clearTokens() {
-  sessionStorage.removeItem('id_token');
-  sessionStorage.removeItem('access_token');
+  localStorage.removeItem('id_token');
+  localStorage.removeItem('access_token');
+  localStorage.removeItem('refresh_token');
   sessionStorage.removeItem('pkce_verifier');
+}
+
+async function tryRefresh() {
+  const refreshToken = localStorage.getItem('refresh_token');
+  if (!refreshToken) return false;
+
+  const body = new URLSearchParams({
+    grant_type: 'refresh_token',
+    client_id: CLIENT_ID,
+    refresh_token: refreshToken,
+  });
+
+  try {
+    const res = await fetch(`${COGNITO_DOMAIN}/oauth2/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+    });
+    if (!res.ok) return false;
+    const tokens = await res.json();
+    storeTokens(tokens);
+    idToken = tokens.id_token;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function ensureValidToken() {
+  if (!isTokenExpired(idToken)) return true;
+  const refreshed = await tryRefresh();
+  if (refreshed) return true;
+  handleSessionExpired();
+  return false;
 }
 
 function handleSessionExpired() {
@@ -105,6 +144,14 @@ async function handleCallback(code) {
   const tokens = await res.json();
   storeTokens(tokens);
   idToken = tokens.id_token;
+
+  // If auth was initiated from another page (e.g. /test.html), redirect back there
+  const returnTo = localStorage.getItem('auth_return');
+  if (returnTo && returnTo !== '/' && returnTo !== '/index.html') {
+    localStorage.removeItem('auth_return');
+    window.location.href = returnTo;
+    return;
+  }
 
   // Clean code from URL
   window.history.replaceState({}, '', window.location.pathname);
@@ -169,10 +216,7 @@ function showError(message) {
 async function handleFile(file) {
   if (!file) return;
 
-  if (isTokenExpired(idToken)) {
-    handleSessionExpired();
-    return;
-  }
+  if (!await ensureValidToken()) return;
 
   showStatus('Requesting upload URL...');
 
@@ -231,7 +275,7 @@ function startPolling(jobId) {
       return;
     }
 
-    if (isTokenExpired(idToken)) { handleSessionExpired(); return; }
+    if (!await ensureValidToken()) return;
 
     let res;
     try {
@@ -281,6 +325,8 @@ async function init() {
   const stored = getStoredToken();
   if (stored && !isTokenExpired(stored)) {
     idToken = stored;
+    showUpload();
+  } else if (await tryRefresh()) {
     showUpload();
   } else {
     clearTokens();

@@ -52,6 +52,13 @@ def lambda_handler(event, context):
         ContentType='text/plain; charset=utf-8',
     )
 
+    s3_client.put_object(
+        Bucket=summaries_bucket,
+        Key=f'summaries/{job_id}/usage.json',
+        Body=json.dumps(event.get('usage_stats', {})).encode('utf-8'),
+        ContentType='application/json',
+    )
+
     completed_at = datetime.now(timezone.utc).isoformat()
     table = dynamodb.Table(os.environ['JOBS_TABLE'])
     table.update_item(

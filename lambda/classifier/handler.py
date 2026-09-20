@@ -64,6 +64,7 @@ def lambda_handler(event, context):
     if raw_label not in VALID_DOC_TYPES:
         raise ValueError(f'Classifier returned unknown doc type: {raw_label!r}')
 
+    usage = response.get('usage', {})
     logger.info({'job_id': job_id, 'doc_type': raw_label, 'action': 'classified'})
 
     return {
@@ -71,4 +72,11 @@ def lambda_handler(event, context):
         'bucket': bucket,
         'key': key,
         'doc_type': raw_label,
+        'usage_stats': {
+            'classifier': {
+                'model': model_id,
+                'input_tokens': usage.get('inputTokens', 0),
+                'output_tokens': usage.get('outputTokens', 0),
+            },
+        },
     }
