@@ -249,11 +249,8 @@ resource "aws_iam_role_policy" "processing_bedrock_runtime" {
     Version = "2012-10-17"
     Statement = [{
       Effect = "Allow"
-      Action = ["bedrock:InvokeModel"]
-      Resource = [
-        "arn:aws:bedrock:${local.region}::foundation-model/${var.bedrock_model_id}",
-        "arn:aws:bedrock:${local.region}::foundation-model/${var.bedrock_classifier_model_id}",
-      ]
+      Action   = ["bedrock:InvokeModel"]
+      Resource = ["*"]
     }]
   })
 }
