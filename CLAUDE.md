@@ -24,6 +24,26 @@ pytest tests/test_extractor.py::TestExtractorToolUseRequest::test_tool_choice_is
 
 Tests mock all AWS calls; no credentials or running infrastructure needed.
 
+### Terraform
+
+```bash
+# Validate and preview changes (CI runs this on pushes to main)
+terraform -chdir=infra fmt -check -recursive
+terraform -chdir=infra validate
+terraform -chdir=infra plan
+
+# Always run fmt before committing — CI will fail if formatting is off
+terraform -chdir=infra fmt -recursive
+```
+
+### Build and deploy (done by CI/CD; run manually if needed)
+
+```bash
+scripts/build_lambdas.sh        # Builds Lambda layer with arm64-optimized wheels
+scripts/ensure_guardrail.sh     # Creates/updates Bedrock guardrail (see note below)
+scripts/deploy_frontend.sh      # Syncs frontend to S3, invalidates CloudFront, generates config.js
+```
+
 ## Architecture
 
 ### Pipeline flow
@@ -62,6 +82,7 @@ All four processing states (ClassifyDocument, ExtractData, ValidateData, RenderS
 - **Extraction:** Same pattern. Forces tool use with `toolChoice={"tool": {"name": "extract_document"}}` so the response always contains a `toolUse` block. Uses Claude Sonnet.
 - **Model IDs must use a geo or global inference profile prefix** (`us.`, `eu.`, `au.`, `jp.`, `global.`). Bare model IDs (`anthropic.claude-*`) fail at runtime.
 - Bedrock Prompt Management versions are pinned: `CLASSIFIER_PROMPT_VERSION` and `PROMPT_VERSIONS_JSON` env vars are set from `aws_bedrock_prompt_version.*.version` in Terraform.
+- **Bedrock guardrail workaround:** The AWS Terraform provider cannot manage the guardrail resource reliably. The deploy workflow removes it from state (`terraform state rm`) before `apply`, then `ensure_guardrail.sh` recreates/updates it via AWS CLI. Don't manage the guardrail resource directly in Terraform.
 
 ### Terraform structure (`infra/`)
 
@@ -81,3 +102,15 @@ All four processing states (ClassifyDocument, ExtractData, ValidateData, RenderS
 ### Frontend (`frontend/`)
 
 Vanilla JS PKCE flow. Tokens stored in `localStorage` with silent refresh via the Cognito token endpoint. `config.js` is generated at deploy time by `scripts/deploy_frontend.sh` — it is not committed and is not present until after first deploy.
+
+**First-deploy Cognito two-step:** On initial deploy, run once with the localhost callback URL defaults in `terraform.tfvars`, then update the Cognito callback URLs with the CloudFront domain printed in the deploy log, commit, and deploy again.
+
+## Adding a document type
+
+1. Add a JSON schema to `schemas/`
+2. Add a Jinja2 template to `templates/`
+3. Add a prompt file to `prompts/`
+4. Add `aws_bedrock_prompt` + `aws_bedrock_prompt_version` resources in `infra/bedrock.tf`
+5. Add the new type to `PROMPT_ARNS_JSON` / `PROMPT_VERSIONS_JSON` env vars in `infra/lambda.tf`
+6. Add the new schema as a `source` block in both the `extractor` and `validator` archive_file resources in `infra/lambda.tf`
+7. Update the valid labels set in `lambda/classifier/handler.py`

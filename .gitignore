@@ -13,3 +13,4 @@ __pycache__/
 infra/lambda_packages/
 lambda/lambda_layer_packages/
 venv/
+.venv/
