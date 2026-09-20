@@ -247,11 +247,18 @@ resource "aws_iam_role_policy" "processing_bedrock_runtime" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = ["bedrock:InvokeModel"]
-      Resource = ["*"]
-    }]
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["bedrock:InvokeModel"]
+        Resource = ["*"]
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["aws-marketplace:ViewSubscriptions"]
+        Resource = ["*"]
+      },
+    ]
   })
 }
 
