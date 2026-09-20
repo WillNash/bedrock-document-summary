@@ -53,7 +53,7 @@ handler = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(handler)
 
 
-def make_tool_use_response(tool_input):
+def make_tool_use_response(tool_input, input_tokens=2000, output_tokens=300):
     return {
         'output': {
             'message': {
@@ -67,7 +67,8 @@ def make_tool_use_response(tool_input):
                     }
                 ]
             }
-        }
+        },
+        'usage': {'inputTokens': input_tokens, 'outputTokens': output_tokens, 'totalTokens': input_tokens + output_tokens},
     }
 
 
@@ -176,6 +177,27 @@ class TestExtractorResponseParsing:
             )
 
         assert result['extracted_data'] == EXTRACTED_LAB_RESULT
+
+    def test_usage_stats_merged_with_upstream(self):
+        upstream_usage = {'classifier': {'model': 'haiku', 'input_tokens': 100, 'output_tokens': 5}}
+        with mock.patch.object(handler, 'bedrock_agent') as mock_agent, \
+             mock.patch.object(handler, 'bedrock_runtime') as mock_runtime, \
+             mock.patch.object(handler, 's3_client') as mock_s3:
+
+            mock_agent.get_prompt.return_value = MOCK_PROMPT_RESPONSE
+            mock_runtime.converse.return_value = make_tool_use_response(EXTRACTED_LAB_RESULT, input_tokens=2000, output_tokens=300)
+            mock_s3.get_object.return_value = make_s3_response()
+
+            result = handler.lambda_handler(
+                {'job_id': 'j-u', 'bucket': 'b', 'key': 'uploads/j-u/doc.txt',
+                 'doc_type': 'lab_result', 'usage_stats': upstream_usage},
+                None,
+            )
+
+        assert result['usage_stats']['classifier'] == upstream_usage['classifier']
+        assert result['usage_stats']['extractor']['input_tokens'] == 2000
+        assert result['usage_stats']['extractor']['output_tokens'] == 300
+        assert result['usage_stats']['extractor']['model'] == MOCK_ENV['BEDROCK_MODEL_ID']
 
     def test_missing_tool_use_block_raises(self):
         bad_response = {

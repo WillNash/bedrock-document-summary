@@ -37,6 +37,18 @@ def make_s3_body(text='Summary text.'):
     return {'Body': body_mock}
 
 
+SAMPLE_USAGE = {
+    'classifier': {'model': 'us.anthropic.claude-haiku-4-5-20251001-v1:0', 'input_tokens': 100, 'output_tokens': 5},
+    'extractor': {'model': 'us.anthropic.claude-sonnet-4-5-20250929-v1:0', 'input_tokens': 2000, 'output_tokens': 300},
+}
+
+
+def s3_side_effect(summary_text='Patient summary here.'):
+    """Return a side_effect list: summary.txt first, usage.json second."""
+    import json as _json
+    return [make_s3_body(summary_text), make_s3_body(_json.dumps(SAMPLE_USAGE))]
+
+
 @pytest.fixture(autouse=True)
 def patch_env(monkeypatch):
     for k, v in MOCK_ENV.items():
@@ -95,7 +107,7 @@ class TestOwnershipAndAvailability:
             mock_table = mock.MagicMock()
             mock_ddb.Table.return_value = mock_table
             mock_table.get_item.return_value = {'Item': make_completed_item()}
-            mock_s3.get_object.return_value = make_s3_body('Patient summary here.')
+            mock_s3.get_object.side_effect = s3_side_effect('Patient summary here.')
 
             result = handler.lambda_handler(make_event(), None)
 
@@ -103,6 +115,26 @@ class TestOwnershipAndAvailability:
         body = json.loads(result['body'])
         assert body['summary'] == 'Patient summary here.'
         assert body['job_id'] == 'job-123'
+        assert body['usage']['classifier']['input_tokens'] == 100
+        assert body['usage']['extractor']['output_tokens'] == 300
+
+    def test_returns_200_with_empty_usage_when_usage_json_missing(self):
+        with mock.patch.object(handler, 'dynamodb') as mock_ddb, \
+             mock.patch.object(handler, 's3_client') as mock_s3:
+
+            mock_table = mock.MagicMock()
+            mock_ddb.Table.return_value = mock_table
+            mock_table.get_item.return_value = {'Item': make_completed_item()}
+            mock_s3.get_object.side_effect = [
+                make_s3_body('Summary text.'),
+                ClientError({'Error': {'Code': 'NoSuchKey', 'Message': 'Not found'}}, 'GetObject'),
+            ]
+
+            result = handler.lambda_handler(make_event(), None)
+
+        assert result['statusCode'] == 200
+        body = json.loads(result['body'])
+        assert body['usage'] == {}
 
     def test_non_nosuchkey_s3_error_propagates(self):
         with mock.patch.object(handler, 'dynamodb') as mock_ddb, \

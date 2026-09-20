@@ -145,6 +145,14 @@ async function handleCallback(code) {
   storeTokens(tokens);
   idToken = tokens.id_token;
 
+  // If auth was initiated from another page (e.g. /test.html), redirect back there
+  const returnTo = localStorage.getItem('auth_return');
+  if (returnTo && returnTo !== '/' && returnTo !== '/index.html') {
+    localStorage.removeItem('auth_return');
+    window.location.href = returnTo;
+    return;
+  }
+
   // Clean code from URL
   window.history.replaceState({}, '', window.location.pathname);
   showUpload();

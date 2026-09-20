@@ -32,13 +32,14 @@ handler = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(handler)
 
 
-def make_converse_response(label):
+def make_converse_response(label, input_tokens=100, output_tokens=5):
     return {
         'output': {
             'message': {
                 'content': [{'text': label}]
             }
-        }
+        },
+        'usage': {'inputTokens': input_tokens, 'outputTokens': output_tokens, 'totalTokens': input_tokens + output_tokens},
     }
 
 
@@ -78,6 +79,9 @@ class TestClassifierLabels:
 
         assert result['doc_type'] == label
         assert result['job_id'] == 'job-1'
+        assert result['usage_stats']['classifier']['input_tokens'] == 100
+        assert result['usage_stats']['classifier']['output_tokens'] == 5
+        assert result['usage_stats']['classifier']['model'] == MOCK_ENV['BEDROCK_CLASSIFIER_MODEL_ID']
 
     def test_whitespace_padded_label_accepted(self):
         """Handler strips and lowercases before matching — padded labels are accepted."""

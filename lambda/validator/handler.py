@@ -41,4 +41,5 @@ def lambda_handler(event, context):
         'key': event['key'],
         'doc_type': doc_type,
         'validated_data': extracted_data,
+        'usage_stats': event.get('usage_stats', {}),
     }
