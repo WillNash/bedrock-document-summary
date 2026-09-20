@@ -18,7 +18,7 @@ variable "environment" {
 variable "bedrock_model_id" {
   type        = string
   description = "Bedrock model or inference profile ID for extraction and rendering. Use a geo-prefixed cross-region inference profile (us., eu., etc.) when available; use the bare model ID (anthropic.claude-*) for models that don't yet have a cross-region profile."
-  default     = "us.anthropic.claude-sonnet-4-6"
+  default     = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 }
 
 variable "bedrock_classifier_model_id" {
