@@ -26,9 +26,15 @@ mkdir -p "$(dirname "$LAYER_ZIP")"
 
 # Install dependencies into the layer structure
 # Lambda layers expect: python.zip with /python/<package> at root
+# --platform flags force arm64 wheels so rpds (Rust extension, jsonschema dep)
+# is compatible with Lambda's arm64 runtime regardless of the build host.
 pip install \
   --quiet \
   --target "$LAYER_SRC/python" \
+  --platform manylinux2014_aarch64 \
+  --only-binary=:all: \
+  --implementation cp \
+  --python-version 3.12 \
   -r "$REQUIREMENTS"
 
 # Remove unnecessary files to reduce zip size

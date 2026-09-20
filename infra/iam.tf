@@ -350,6 +350,20 @@ resource "aws_iam_role_policy" "fail_handler_dynamodb" {
   })
 }
 
+resource "aws_iam_role_policy" "fail_handler_kms" {
+  name = "kms-phi"
+  role = aws_iam_role.fail_handler.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["kms:Decrypt", "kms:GenerateDataKey"]
+      Resource = aws_kms_key.phi.arn
+    }]
+  })
+}
+
 resource "aws_iam_role_policy" "fail_handler_xray" {
   name = "xray"
   role = aws_iam_role.fail_handler.id
