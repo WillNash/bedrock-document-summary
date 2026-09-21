@@ -62,10 +62,17 @@ aws ecr get-login-password --region "$AWS_REGION" | \
 # Build and push image in one step (arm64, --provenance=false required for Lambda compatibility).
 # --push is used instead of a separate docker push because the docker-container buildx driver
 # (used in CI) does not export to the local daemon — it must push directly to the registry.
+# GHA cache is used in CI to avoid re-downloading torch/transformers/scibert on every run.
+CACHE_FLAGS=()
+if [ -n "${GITHUB_ACTIONS:-}" ]; then
+  CACHE_FLAGS=(--cache-from type=gha --cache-to type=gha,mode=max)
+fi
+
 docker buildx build \
   --platform linux/arm64 \
   --provenance=false \
   --push \
+  "${CACHE_FLAGS[@]}" \
   -t "${ECR_URI}:latest" \
   "$SCRIPT_DIR/../lambda/gold_comparator/"
 
