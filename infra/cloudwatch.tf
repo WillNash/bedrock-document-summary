@@ -10,6 +10,7 @@ locals {
     "renderer",
     "fail-handler",
     "comparator",
+    "gold-comparator",
   ]
 }
 
