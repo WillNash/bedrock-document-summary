@@ -3,24 +3,24 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Consistency Test — Document Summarizer</title>
+  <title>Gold Standard Test — Document Summarizer</title>
   <link rel="stylesheet" href="style.css" />
   <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 </head>
 <body>
   <div id="app" style="max-width: 760px;">
     <div class="card">
-      <h1>Consistency Test</h1>
+      <h1>Gold Standard Test</h1>
 
       <div id="auth-section" class="hidden">
-        <p>Sign in to run consistency tests.</p>
+        <p>Sign in to run a gold standard accuracy test.</p>
         <button id="signin-btn" class="btn-primary">Sign In</button>
       </div>
 
       <div id="test-section" class="hidden">
         <div class="config-row">
           <div class="file-area">
-            <label class="btn-secondary" for="file-input">Choose File</label>
+            <label class="btn-secondary" for="file-input">Choose Document</label>
             <input type="file" id="file-input" class="hidden" accept=".txt,.md,.csv,.pdf" />
             <span id="file-name" class="file-name">No file selected</span>
           </div>
@@ -31,6 +31,14 @@
           <button id="run-btn" class="btn-primary" disabled>Run Test</button>
         </div>
 
+        <div class="config-row">
+          <div class="file-area">
+            <label class="btn-secondary" for="ref-input">Choose Reference</label>
+            <input type="file" id="ref-input" class="hidden" accept=".txt,.md" />
+            <span id="ref-name" class="file-name">No reference selected</span>
+          </div>
+        </div>
+
         <div id="progress-panel" class="hidden">
           <p id="progress-header" class="progress-header"></p>
           <div id="run-grid" class="run-grid"></div>
@@ -39,22 +47,22 @@
 
         <div id="comparison-panel" class="hidden">
           <div class="comparison-header">
-            <h2>Similarity Results</h2>
+            <h2>Accuracy Results</h2>
             <span id="comparison-run-count" class="comparison-subhead"></span>
           </div>
           <div id="comparison-metrics" class="comparison-metrics"></div>
-          <div class="comparison-matrix-heading">Pairwise Matrix — Embedding Cosine</div>
-          <div id="similarity-matrix" class="matrix-scroll"></div>
+          <div class="comparison-matrix-heading">Per-Run Scores</div>
+          <div id="score-table" class="matrix-scroll"></div>
         </div>
 
         <div class="signout-row">
-          <a href="gold.html" class="btn-link">Gold Standard Test</a>
+          <a href="test.html" class="btn-link">Consistency Test</a>
           <button id="signout-btn" class="btn-link">Sign Out</button>
         </div>
       </div>
     </div>
   </div>
   <script src="config.js"></script>
-  <script src="test.js"></script>
+  <script src="gold.js"></script>
 </body>
 </html>

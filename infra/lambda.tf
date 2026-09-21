@@ -111,6 +111,12 @@ data "archive_file" "comparator" {
   output_path = "${path.module}/lambda_packages/comparator.zip"
 }
 
+data "archive_file" "gold_comparator" {
+  type        = "zip"
+  source_dir  = "${path.module}/../lambda/gold_comparator"
+  output_path = "${path.module}/lambda_packages/gold_comparator.zip"
+}
+
 data "archive_file" "fail_handler" {
   type        = "zip"
   source_dir  = "${path.module}/../lambda/fail_handler"
@@ -401,6 +407,30 @@ resource "aws_lambda_function" "comparator" {
 
   tags = local.common_tags
 
+  depends_on = [aws_cloudwatch_log_group.lambda]
+}
+
+resource "aws_lambda_function" "gold_comparator" {
+  function_name    = "${local.name_prefix}-gold-comparator"
+  filename         = data.archive_file.gold_comparator.output_path
+  source_code_hash = data.archive_file.gold_comparator.output_base64sha256
+  handler          = "handler.lambda_handler"
+  runtime          = "python3.12"
+  architectures    = ["arm64"]
+  role             = aws_iam_role.gold_comparator.arn
+  timeout          = 30
+  memory_size      = 256
+
+  tracing_config {
+    mode = "Active"
+  }
+
+  logging_config {
+    log_format = "JSON"
+    log_group  = aws_cloudwatch_log_group.lambda["gold-comparator"].name
+  }
+
+  tags       = local.common_tags
   depends_on = [aws_cloudwatch_log_group.lambda]
 }
 
