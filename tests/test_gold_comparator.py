@@ -7,6 +7,7 @@ uses ThreadPoolExecutor and call order is non-deterministic.
 torch and bert_score are stubbed so no model weights are needed to run tests.
 """
 
+import importlib.machinery
 import importlib.util
 import io
 import json
@@ -20,6 +21,7 @@ import pytest
 # ── Stub torch and bert_score before handler module is loaded ─────────────────
 
 _mock_torch = types.ModuleType('torch')
+_mock_torch.__spec__ = importlib.machinery.ModuleSpec('torch', loader=None)
 _mock_torch.no_grad = mock.MagicMock()
 sys.modules['torch'] = _mock_torch
 
@@ -36,6 +38,7 @@ def _fake_score(cands, refs, verbose=False, batch_size=8):
 _mock_scorer_instance.score.side_effect = _fake_score
 _mock_bertscore_cls = mock.MagicMock(return_value=_mock_scorer_instance)
 _mock_bert_score_module = types.ModuleType('bert_score')
+_mock_bert_score_module.__spec__ = importlib.machinery.ModuleSpec('bert_score', loader=None)
 _mock_bert_score_module.BERTScorer = _mock_bertscore_cls
 sys.modules['bert_score'] = _mock_bert_score_module
 
@@ -49,6 +52,11 @@ try:
     _spec.loader.exec_module(_mod)
 except ImportError as _e:
     pytest.skip(f"gold_comparator handler import failed: {_e}", allow_module_level=True)
+finally:
+    # Remove stubs so they don't interfere with other test modules that import real libraries.
+    # The handler already captured its references at load time so this is safe.
+    sys.modules.pop('torch', None)
+    sys.modules.pop('bert_score', None)
 
 lambda_handler = _mod.lambda_handler
 
