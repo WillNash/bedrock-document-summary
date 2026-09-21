@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# build_lambdas.sh — Build the Lambda layer zip (jinja2, jsonschema, numpy, scikit-learn).
+# build_lambdas.sh — Build the Lambda layer zip (jinja2, jsonschema).
 # Run this before every `terraform apply`.
 #
 # Bundling rules:
 #   schemas/  →  extractor zip  AND  validator zip   (Terraform archive_file handles this)
 #   templates/ →  renderer zip                        (Terraform archive_file handles this)
-#   layer.zip  →  shared Python deps for all Lambdas
+#   layer.zip  →  shared Python deps (jinja2, jsonschema) for validator + renderer
 #
 # The Terraform archive_file data sources in lambda.tf bundle schemas and templates
 # directly, so this script only needs to build the Lambda layer.

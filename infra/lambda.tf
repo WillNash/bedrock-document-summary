@@ -6,7 +6,7 @@ resource "aws_lambda_layer_version" "deps" {
   layer_name               = "${local.name_prefix}-deps"
   compatible_runtimes      = ["python3.12"]
   compatible_architectures = ["arm64"]
-  description              = "jinja2, jsonschema, numpy, scikit-learn for Lambda functions"
+  description              = "jinja2 and jsonschema for renderer and validator Lambdas"
 
   lifecycle {
     create_before_destroy = true
@@ -389,7 +389,6 @@ resource "aws_lambda_function" "comparator" {
   role             = aws_iam_role.comparator.arn
   timeout          = 30
   memory_size      = 256
-  layers           = [aws_lambda_layer_version.deps.arn]
 
   tracing_config {
     mode = "Active"
