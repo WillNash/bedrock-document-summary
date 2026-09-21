@@ -9,7 +9,9 @@ RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/wh
 
 RUN pip install --no-cache-dir \
     numpy==1.26.4 \
+    pillow==10.4.0 \
     tokenizers==0.13.3 \
+    huggingface-hub==0.19.4 \
     transformers==4.33.3 \
     bert-score==0.3.13
 
