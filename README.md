@@ -129,9 +129,35 @@ prompts/        System prompts for classification and extraction
 infra/          Terraform — one .tf file per concern
 bootstrap/      Terraform module that creates the S3 state bucket and DynamoDB lock table (run once to enable CI/CD)
 scripts/        build_lambdas.sh, deploy_frontend.sh, ensure_guardrail.sh (all called by CI/CD)
+tools/          consistency_evaluator.py — measures output variability across N runs
 tests/          pytest unit tests
 frontend/       Vanilla JS SPA (config.js generated at deploy time by deploy_frontend.sh)
 ```
+
+### Evaluating output consistency
+
+`tools/consistency_evaluator.py` measures how much the pipeline's outputs vary across N runs of the same document. It calls Bedrock directly with a configurable temperature (default 0.7) and applies three metric layers to both the rendered summary and the extracted JSON:
+
+| Metric | Layer | Notes |
+|---|---|---|
+| Sentence embedding cosine | Text | `NeuML/pubmedbert-base-embeddings`; ~440 MB download on first use |
+| BERTScore F1 | Text | `microsoft/deberta-large-mnli`; capped at 5 texts for latency |
+| TF-IDF cosine | Text | Lightweight baseline; zero model download |
+| Field agreement | JSON | Plurality fraction across N extracted values per field |
+
+```bash
+pip install -r tools/requirements.txt
+python tools/consistency_evaluator.py \
+  --doc-type lab_result \
+  --document path/to/doc.txt \
+  --prompt prompts/lab_result_prompt.txt \
+  --model-id us.anthropic.claude-sonnet-4-5-20250929-v1:0 \
+  --n-runs 5 \
+  --temperature 0.7 \
+  --output-json results.json
+```
+
+The `--prompt` file must match the pinned Bedrock Prompt Management version used in production. This is **pathway 1** of a planned two-pathway evaluation system; pathway 2 (measuring N outputs against a gold standard reference) is a separate future tool.
 
 ### Adding a document type
 
