@@ -74,9 +74,12 @@ jobs:
         # the running Lambda to the new image (Terraform ignores image_uri changes).
         run: |
           FUNCTION_NAME=$(terraform -chdir=infra output -raw gold_comparator_function_name 2>/dev/null || true)
-          if [ -z "$FUNCTION_NAME" ]; then exit 0; fi
+          if [[ ! "$FUNCTION_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+            echo "INFO: Lambda not yet deployed or output unavailable, skipping update."
+            exit 0
+          fi
           ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
-          REPO=$(terraform -chdir=infra output -raw gold_comparator_ecr_repository_name)
+          REPO=$(terraform -chdir=infra output -raw gold_comparator_ecr_repository_name 2>/dev/null || true)
           aws lambda update-function-code \
             --function-name "$FUNCTION_NAME" \
             --image-uri "${ACCOUNT}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${REPO}:latest" \
