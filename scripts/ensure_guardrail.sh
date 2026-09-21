@@ -43,6 +43,20 @@ else
   echo "Found existing guardrail: $GUARDRAIL_ID" >&2
 fi
 
+echo "Deleting old guardrail versions..." >&2
+OLD_VERSIONS=$(aws bedrock list-guardrails \
+  --region "$REGION" \
+  --guardrail-identifier "$GUARDRAIL_ID" \
+  --query "guardrails[?version!='DRAFT'].version" \
+  --output text 2>/dev/null || true)
+for V in $OLD_VERSIONS; do
+  aws bedrock delete-guardrail \
+    --region "$REGION" \
+    --guardrail-identifier "$GUARDRAIL_ID" \
+    --guardrail-version "$V" 2>/dev/null || true
+  echo "  deleted version $V" >&2
+done
+
 echo "Creating guardrail version..." >&2
 GUARDRAIL_VERSION=$(aws bedrock create-guardrail-version \
   --region "$REGION" \
