@@ -563,6 +563,7 @@ async function runGoldTest() {
   }
 
   let comparison = null;
+  let scoringError = null;
   if (succeeded >= 1) {
     setHeader(`Complete — ${succeeded}/${n} succeeded. Scoring against reference…`);
     const summaries = results.filter(r => r.summary !== null).map(r => r.summary);
@@ -570,7 +571,8 @@ async function runGoldTest() {
       comparison = await runGoldComparison(summaries, referenceText);
     } catch (err) {
       if (err.message === 'auth') { handleSessionExpired(); return; }
-      setHeader(`Scoring failed: ${err.message} — zip will download without accuracy metrics.`);
+      scoringError = err.message;
+      console.error('gold-compare failed:', err.message);
     }
   }
 
@@ -581,7 +583,8 @@ async function runGoldTest() {
     showGoldPanel(comparison, succeeded);
     setHeader(`Done — gold_${timestamp}.zip downloaded (${succeeded} summar${succeeded !== 1 ? 'ies' : 'y'} + accuracy scores).`);
   } else {
-    setHeader(`Done — gold_${timestamp}.zip downloaded (${succeeded} summary file${succeeded !== 1 ? 's' : ''}).`);
+    const errSuffix = scoringError ? ` Scoring error: ${scoringError}.` : '';
+    setHeader(`Done — gold_${timestamp}.zip downloaded (${succeeded} summary file${succeeded !== 1 ? 's' : ''}, no accuracy metrics).${errSuffix}`);
   }
 
   isRunning = false;
