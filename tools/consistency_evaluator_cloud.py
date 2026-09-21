@@ -1,22 +1,22 @@
 """
-Pathway 1 — Variability evaluator (local variant).
+Pathway 1 — Variability evaluator (cloud / Bedrock-native variant).
 
-Runs the extraction + rendering pipeline N times with a configurable temperature
-and measures how much the outputs vary across runs using three metric layers:
-  - Sentence embedding cosine similarity (NeuML/pubmedbert-base-embeddings)
-  - BERTScore F1 (microsoft/deberta-large-mnli)
-  - TF-IDF cosine (lightweight baseline, zero model download)
+Uses Bedrock Titan Text Embeddings v2 for semantic similarity — no local model
+downloads required. All embedding calls go through the same boto3 client used
+for extraction, so this tool runs anywhere boto3 runs (including Lambda).
 
-Requires local model downloads (~440 MB PubMedBERT, ~900 MB deberta).
-For a version that uses Bedrock Titan Embeddings with no local downloads, see
-consistency_evaluator_cloud.py.
+Metrics:
+  - Bedrock Titan Text Embeddings v2 cosine similarity (amazon.titan-embed-text-v2:0)
+  - TF-IDF cosine (lightweight baseline, zero API cost)
+
+For the local variant with PubMedBERT embeddings and BERTScore, see
+consistency_evaluator.py.
 
 This is pathway 1 of 2. Pathway 2 (gold standard comparison) will be a separate
 tool. The N-run collection function (_collect_runs) is the only shared
 infrastructure; do not add reference-based logic here.
 
 Usage:
-    pip install -r tools/requirements.txt
     python tools/consistency_evaluator.py \\
         --doc-type lab_result \\
         --document path/to/doc.txt \\
@@ -29,7 +29,6 @@ Usage:
 
 import argparse
 import boto3
-import itertools
 import json
 import logging
 from collections import Counter
@@ -48,8 +47,8 @@ TEMPLATE_DIR = REPO_ROOT / "templates"
 
 DEFAULT_TEMPERATURE = 0.7
 DEFAULT_N_RUNS = 5
-BERTSCORE_MODEL = "microsoft/deberta-large-mnli"
-EMBEDDING_MODEL = "NeuML/pubmedbert-base-embeddings"
+EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0"
+EMBEDDING_DIMENSIONS = 1024
 
 VALID_DOC_TYPES = frozenset(
     {"lab_result", "doctors_notes", "injury_doc", "visit_assessment", "psych_eval"}
@@ -80,16 +79,6 @@ def _load_schema(doc_type: str) -> dict:
     schema_file = SCHEMA_DIR / f"{doc_type}_schema.json"
     with open(schema_file) as f:
         return json.load(f)
-
-
-def _load_models():
-    """Loads ML models. Extracted as a standalone function for testability."""
-    from sentence_transformers import SentenceTransformer  # lazy — ~440 MB download on first use
-    from bert_score import BERTScorer  # lazy — ~900 MB download on first use
-
-    embedding_model = SentenceTransformer(EMBEDDING_MODEL)
-    bertscore_scorer = BERTScorer(model_type=BERTSCORE_MODEL, lang="en")
-    return embedding_model, bertscore_scorer
 
 
 def _extract_once(
@@ -208,47 +197,30 @@ def variability_stats(sim_matrix: np.ndarray) -> dict:
     }
 
 
-def compute_embedding_similarity(texts: list[str], model) -> dict:
-    """Pairwise variability across N runs using sentence embeddings (pathway 1)."""
-    from sentence_transformers import SentenceTransformer  # noqa: lazy import
-
+def compute_embedding_similarity(texts: list[str], bedrock_runtime) -> dict:
+    """
+    Pairwise variability using Bedrock Titan Text Embeddings v2 (pathway 1).
+    Makes one invoke_model call per text; no local model download required.
+    Cost: ~$0.00002 per 1,000 tokens (effectively free for typical summaries).
+    """
+    embeddings = []
     for text in texts:
-        if len(text.split()) > 380:
-            logger.warning(
-                "Text exceeds 380 words — PubMedBERT's 512-token limit may silently truncate it."
-            )
-            break
+        response = bedrock_runtime.invoke_model(
+            modelId=EMBEDDING_MODEL,
+            body=json.dumps({"inputText": text, "dimensions": EMBEDDING_DIMENSIONS, "normalize": True}),
+            contentType="application/json",
+            accept="application/json",
+        )
+        result = json.loads(response["body"].read())
+        embeddings.append(result["embedding"])
 
-    embeddings = model.encode(texts, convert_to_tensor=True)
-    sim_matrix = model.similarity(embeddings, embeddings).cpu().numpy()
+    embeddings_np = np.array(embeddings)  # shape: (n, EMBEDDING_DIMENSIONS)
+    sim_matrix = sklearn_cosine(embeddings_np)
     return variability_stats(sim_matrix)
 
 
-def compute_bertscore_similarity(texts: list[str], scorer) -> dict:
-    """Pairwise variability across N runs using BERTScore F1 (pathway 1)."""
-    from bert_score import BERTScorer  # noqa: lazy import
-
-    texts = texts[:5]  # cap before computing n — latency guard
-    n = len(texts)
-
-    for text in texts:
-        if len(text.split()) > 380:
-            logger.warning(
-                "Text exceeds 380 words — BERTScore's 512-token limit may silently truncate it."
-            )
-            break
-
-    f1_matrix = np.ones((n, n))
-    for i, j in itertools.combinations(range(n), 2):
-        _, _, F1 = scorer.score([texts[i]], [texts[j]])
-        f1_matrix[i, j] = F1.item()  # F1 is a torch.Tensor; .item() extracts the scalar
-        f1_matrix[j, i] = F1.item()  # F1 is approximately symmetric
-
-    return variability_stats(f1_matrix)
-
-
 def compute_tfidf_similarity(texts: list[str]) -> dict:
-    """Pairwise variability using TF-IDF cosine. Zero model download baseline (pathway 1)."""
+    """Pairwise variability using TF-IDF cosine. Zero API cost baseline (pathway 1)."""
     tfidf_matrix = TfidfVectorizer().fit_transform(texts)
     sim_matrix = sklearn_cosine(tfidf_matrix)
     return variability_stats(sim_matrix)
@@ -291,8 +263,6 @@ def run_evaluation(args) -> dict:
     jinja_env = _build_jinja_env()
     bedrock_runtime = boto3.client("bedrock-runtime", region_name=args.region)
 
-    embedding_model, bertscore_scorer = _load_models()
-
     extracted_list, summary_list = _collect_runs(
         bedrock_runtime=bedrock_runtime,
         model_id=args.model_id,
@@ -312,11 +282,9 @@ def run_evaluation(args) -> dict:
             "n_runs": args.n_runs,
             "temperature": args.temperature,
             "embedding_model": EMBEDDING_MODEL,
-            "bertscore_model": BERTSCORE_MODEL,
         },
         "text_layer": {
-            "embedding_cosine": compute_embedding_similarity(summary_list, embedding_model),
-            "bertscore_f1": compute_bertscore_similarity(summary_list, bertscore_scorer),
+            "embedding_cosine": compute_embedding_similarity(summary_list, bedrock_runtime),
             "tfidf_cosine": compute_tfidf_similarity(summary_list),
         },
         "json_layer": compute_json_field_consistency(extracted_list),
@@ -325,16 +293,15 @@ def run_evaluation(args) -> dict:
 
 def _print_report(results: dict) -> None:
     m = results["metadata"]
-    print("\n=== Consistency Evaluation Report (Pathway 1 — Variability, local) ===")
+    print("\n=== Consistency Evaluation Report (Pathway 1 — Variability) ===")
     print(f"Doc type:    {m['doc_type']}")
     print(f"Model:       {m['model_id']}")
     print(f"Runs:        {m['n_runs']}  |  Temperature: {m['temperature']}")
     print()
     print("── Text layer (rendered summary) ──")
     for metric_key, label in [
-        ("embedding_cosine", f"Embedding cosine  ({m['embedding_model'].split('/')[-1]})"),
-        ("bertscore_f1", f"BERTScore F1      ({m['bertscore_model'].split('/')[-1]})"),
-        ("tfidf_cosine", "TF-IDF cosine     (baseline)"),
+        ("embedding_cosine", f"Titan embedding cosine  ({m['embedding_model']})"),
+        ("tfidf_cosine", "TF-IDF cosine           (baseline)"),
     ]:
         s = results["text_layer"][metric_key]
         cv_str = f"{s['cv']:.4f}" if s["cv"] is not None else "N/A"
@@ -350,7 +317,7 @@ def _print_report(results: dict) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Measure output variability across N runs — local variant with PubMedBERT + BERTScore."
+        description="Measure output variability across N runs of the summarization pipeline (pathway 1)."
     )
     parser.add_argument("--doc-type", required=True, choices=sorted(VALID_DOC_TYPES))
     parser.add_argument("--document", required=True, help="Path to the document file to process")

@@ -123,7 +123,7 @@ function showTest() {
 
 function setRunBtnEnabled() {
   const n = parseInt(document.getElementById('run-count').value, 10);
-  document.getElementById('run-btn').disabled = !currentFile || !(n >= 1 && n <= 20) || isRunning;
+  document.getElementById('run-btn').disabled = !currentFile || !(n >= 1 && n <= 200) || isRunning;
 }
 
 function buildRunGrid(n) {
@@ -235,6 +235,150 @@ async function pollUntilDone(job_id, runNum) {
   throw new Error(`timed out after 10 min (run ${runNum})`);
 }
 
+// ── Comparison ────────────────────────────────────────────────────────────────
+
+async function runComparison(summaries) {
+  if (!await ensureValidToken()) throw new Error('auth');
+  const res = await fetch(`${API_URL}/compare`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${idToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ texts: summaries }),
+  });
+  if (res.status === 401) throw new Error('auth');
+  if (!res.ok) throw new Error(`compare HTTP ${res.status}`);
+  return res.json();
+}
+
+function _matrixCellClass(val, i, j) {
+  if (i === j) return 'diag';
+  if (val >= 0.9) return 'high';
+  if (val >= 0.7) return 'mid';
+  return 'low';
+}
+
+function _fmt(n) {
+  return typeof n === 'number' ? n.toFixed(3) : '—';
+}
+
+function showComparisonPanel(comparison, succeededCount) {
+  const panel = document.getElementById('comparison-panel');
+  panel.classList.remove('hidden');
+
+  document.getElementById('comparison-run-count').textContent =
+    `${succeededCount} run${succeededCount !== 1 ? 's' : ''} compared`;
+
+  const metricsEl = document.getElementById('comparison-metrics');
+  metricsEl.innerHTML = '';
+
+  const metrics = [
+    { key: 'embedding_cosine', title: 'Titan Embedding Cosine' },
+    { key: 'tfidf_cosine',     title: 'TF-IDF Cosine (baseline)' },
+  ];
+
+  for (const { key, title } of metrics) {
+    const s = comparison[key];
+    const card = document.createElement('div');
+    card.className = 'metric-card';
+    card.innerHTML = `
+      <div class="metric-card-title">${title}</div>
+      <div class="metric-row">
+        <div class="metric-stat">
+          <span class="metric-stat-label">Mean</span>
+          <span class="metric-stat-value">${_fmt(s.mean)}</span>
+        </div>
+        <div class="metric-stat">
+          <span class="metric-stat-label">Min</span>
+          <span class="metric-stat-value">${_fmt(s.min)}</span>
+        </div>
+        <div class="metric-stat">
+          <span class="metric-stat-label">Max</span>
+          <span class="metric-stat-value">${_fmt(s.max)}</span>
+        </div>
+        <div class="metric-stat">
+          <span class="metric-stat-label">Std</span>
+          <span class="metric-stat-value">${_fmt(s.std)}</span>
+        </div>
+      </div>`;
+    metricsEl.appendChild(card);
+  }
+
+  const matrixEl = document.getElementById('similarity-matrix');
+  matrixEl.innerHTML = '';
+  const matrix = comparison.embedding_cosine.matrix;
+  const n = matrix.length;
+  const table = document.createElement('table');
+  table.className = 'sim-matrix';
+
+  const thead = document.createElement('thead');
+  const headerRow = document.createElement('tr');
+  headerRow.appendChild(document.createElement('th'));
+  for (let j = 0; j < n; j++) {
+    const th = document.createElement('th');
+    th.textContent = `R${String(j + 1).padStart(2, '0')}`;
+    headerRow.appendChild(th);
+  }
+  thead.appendChild(headerRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+  for (let i = 0; i < n; i++) {
+    const tr = document.createElement('tr');
+    const rowHead = document.createElement('th');
+    rowHead.textContent = `R${String(i + 1).padStart(2, '0')}`;
+    tr.appendChild(rowHead);
+    for (let j = 0; j < n; j++) {
+      const td = document.createElement('td');
+      const val = matrix[i][j];
+      td.className = _matrixCellClass(val, i, j);
+      td.textContent = val.toFixed(3);
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  matrixEl.appendChild(table);
+}
+
+function buildComparisonReport(docName, timestamp, succeededCount, comparison) {
+  const s = comparison.embedding_cosine;
+  const t = comparison.tfidf_cosine;
+  const cv = v => (v != null ? v.toFixed(4) : 'N/A');
+  const f = v => (typeof v === 'number' ? v.toFixed(4) : '—');
+
+  const matrix = comparison.embedding_cosine.matrix;
+  const n = matrix.length;
+  const colW = 7;
+  const header = ['       '].concat(
+    Array.from({ length: n }, (_, i) => `R${String(i + 1).padStart(2, '0')}`.padStart(colW))
+  ).join('  ');
+
+  const rows = matrix.map((row, i) => {
+    const cells = row.map(v => v.toFixed(3).padStart(colW)).join('  ');
+    return `R${String(i + 1).padStart(2, '0')}     ${cells}`;
+  });
+
+  return [
+    'Consistency Comparison Report',
+    '==============================',
+    `Document : ${docName}`,
+    `Timestamp: ${timestamp}`,
+    `Runs     : ${succeededCount}`,
+    '',
+    '── Titan Embedding Cosine ──',
+    `  Mean   : ${f(s.mean)}    Min : ${f(s.min)}    Max : ${f(s.max)}`,
+    `  Std Dev: ${f(s.std)}    CV  : ${cv(s.cv)}`,
+    '',
+    '── TF-IDF Cosine (baseline) ──',
+    `  Mean   : ${f(t.mean)}    Min : ${f(t.min)}    Max : ${f(t.max)}`,
+    `  Std Dev: ${f(t.std)}    CV  : ${cv(t.cv)}`,
+    '',
+    '── Pairwise Matrix (Embedding Cosine) ──',
+    header,
+    ...rows,
+    '',
+  ].join('\n');
+}
+
 // ── Zip builder ───────────────────────────────────────────────────────────────
 
 function buildUsageReport(docName, timestamp, results) {
@@ -282,7 +426,7 @@ function buildUsageReport(docName, timestamp, results) {
   return lines.join('\n');
 }
 
-async function buildAndDownloadZip(docName, timestamp, results) {
+async function buildAndDownloadZip(docName, timestamp, results, comparison) {
   const zip = new JSZip();
   const folder = zip.folder(`consistency_${timestamp}`);
   const succeeded = results.filter(r => r.summary !== null).length;
@@ -309,6 +453,11 @@ async function buildAndDownloadZip(docName, timestamp, results) {
   folder.file('manifest.txt', manifest.join('\n'));
   folder.file('usage_report.txt', buildUsageReport(docName, timestamp, results));
 
+  if (comparison) {
+    folder.file('comparison.json', JSON.stringify(comparison, null, 2));
+    folder.file('comparison_report.txt', buildComparisonReport(docName, timestamp, succeeded, comparison));
+  }
+
   const blob = await zip.generateAsync({ type: 'blob' });
   const url = URL.createObjectURL(blob);
   const a = Object.assign(document.createElement('a'), { href: url, download: `consistency_${timestamp}.zip` });
@@ -330,7 +479,7 @@ async function runConsistencyTest() {
   if (isRunning || !currentFile) return;
 
   const n = parseInt(document.getElementById('run-count').value, 10);
-  if (!(n >= 1 && n <= 20)) return;
+  if (!(n >= 1 && n <= 200)) return;
 
   isRunning = true;
   document.getElementById('run-btn').disabled = true;
@@ -395,9 +544,31 @@ async function runConsistencyTest() {
   const succeeded = results.filter(r => r.summary !== null).length;
   if (succeeded === 0) {
     setHeader('All runs failed — nothing to download.');
+    isRunning = false;
+    setRunBtnEnabled();
+    return;
+  }
+
+  // Run comparison if at least 2 summaries succeeded
+  let comparison = null;
+  if (succeeded >= 2) {
+    setHeader(`Complete — ${succeeded}/${n} succeeded. Comparing summaries…`);
+    const summaries = results.filter(r => r.summary !== null).map(r => r.summary);
+    try {
+      comparison = await runComparison(summaries);
+    } catch (err) {
+      if (err.message === 'auth') { handleSessionExpired(); return; }
+      // comparison failed — continue with zip download, just omit comparison files
+    }
+  }
+
+  setHeader(`Building zip…`);
+  await buildAndDownloadZip(file.name, timestamp, results, comparison);
+
+  if (comparison) {
+    showComparisonPanel(comparison, succeeded);
+    setHeader(`Done — consistency_${timestamp}.zip downloaded (${succeeded} summar${succeeded !== 1 ? 'ies' : 'y'} + comparison).`);
   } else {
-    setHeader(`Complete — ${succeeded}/${n} succeeded. Building zip…`);
-    await buildAndDownloadZip(file.name, timestamp, results);
     setHeader(`Done — consistency_${timestamp}.zip downloaded (${succeeded} summary file${succeeded !== 1 ? 's' : ''}).`);
   }
 

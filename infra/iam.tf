@@ -317,6 +317,56 @@ resource "aws_iam_role_policy" "processing_xray" {
   })
 }
 
+# ── comparator role ──────────────────────────────────────────────────────────
+
+resource "aws_iam_role" "comparator" {
+  name               = "${local.name_prefix}-comparator-role"
+  assume_role_policy = data.aws_iam_policy_document.lambda_trust.json
+  tags               = local.common_tags
+}
+
+resource "aws_iam_role_policy" "comparator_logs" {
+  name = "cloudwatch-logs"
+  role = aws_iam_role.comparator.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents",
+      ]
+      Resource = "arn:aws:logs:*:${local.account_id}:log-group:/aws/lambda/${local.name_prefix}-comparator:*"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "comparator_bedrock" {
+  name = "bedrock-invoke"
+  role = aws_iam_role.comparator.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["bedrock:InvokeModel"]
+      Resource = ["*"]
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "comparator_xray" {
+  name = "xray"
+  role = aws_iam_role.comparator.id
+
+  policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [{ Effect = "Allow", Action = local.xray_actions, Resource = "*" }]
+  })
+}
+
 # ── fail_handler role ─────────────────────────────────────────────────────────
 
 resource "aws_iam_role" "fail_handler" {

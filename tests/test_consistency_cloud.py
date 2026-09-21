@@ -1,21 +1,14 @@
 """
-Tests for tools/consistency_evaluator.py — pathway 1, local variant.
+Tests for tools/consistency_evaluator_cloud.py — pathway 1, cloud variant.
 
-Validates the similarity computation and aggregation logic using mocked and
-synthetic responses. The orchestration and pure-logic tests run with no model
-downloads. The embedding tests download all-MiniLM-L6-v2 (~91 MB) on first run.
-BERTScore tests are marked slow and excluded from the default CI run.
-
-To run only the fast tests (no model downloads):
-    pytest tests/test_consistency.py -m "not slow" -v
-
-To run all tests including BERTScore:
-    pytest tests/test_consistency.py -v
+No real Bedrock calls or model downloads are made — embedding similarity is tested
+by mocking bedrock_runtime.invoke_model() to return known embedding vectors.
 """
 
 import contextlib
 import importlib as _importlib
 import importlib.util
+import io
 import json
 import sys
 from pathlib import Path
@@ -25,17 +18,17 @@ import pytest
 
 # ── Dependency availability check ─────────────────────────────────────────────
 _MISSING_DEPS = [
-    m for m in ("numpy", "sentence_transformers", "bert_score", "sklearn")
+    m for m in ("numpy", "sklearn")
     if _importlib.util.find_spec(m) is None
 ]
 pytestmark = pytest.mark.skipif(
-    bool(_MISSING_DEPS), reason=f"Missing ML deps: {_MISSING_DEPS}"
+    bool(_MISSING_DEPS), reason=f"Missing deps: {_MISSING_DEPS}"
 )
 
 # ── Load consistency_evaluator from tools/ ────────────────────────────────────
 _TOOLS_DIR = Path(__file__).parent.parent / "tools"
 _spec = importlib.util.spec_from_file_location(
-    "consistency_evaluator", _TOOLS_DIR / "consistency_evaluator.py"
+    "consistency_evaluator_cloud", _TOOLS_DIR / "consistency_evaluator_cloud.py"
 )
 _mod = importlib.util.module_from_spec(_spec)
 try:
@@ -43,7 +36,7 @@ try:
 except ImportError as _e:
     pytest.skip(f"consistency_evaluator import failed: {_e}", allow_module_level=True)
 
-sys.modules["consistency_evaluator"] = _mod
+sys.modules["consistency_evaluator_cloud"] = _mod
 
 import numpy as np
 
@@ -51,8 +44,21 @@ variability_stats = _mod.variability_stats
 compute_tfidf_similarity = _mod.compute_tfidf_similarity
 compute_json_field_consistency = _mod.compute_json_field_consistency
 compute_embedding_similarity = _mod.compute_embedding_similarity
-compute_bertscore_similarity = _mod.compute_bertscore_similarity
 run_evaluation = _mod.run_evaluation
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+def _embedding_mock(vectors: list[list[float]]):
+    """Returns a mock bedrock_runtime whose invoke_model yields the given embedding vectors."""
+    br = mock.MagicMock()
+    responses = []
+    for vec in vectors:
+        body = json.dumps({"embedding": vec, "inputTextTokenCount": len(vec)}).encode()
+        responses.append({"body": io.BytesIO(body)})
+    br.invoke_model.side_effect = responses
+    return br
 
 
 # ── TestVariabilityStats ───────────────────────────────────────────────────────
@@ -174,80 +180,58 @@ class TestJsonFieldConsistency:
 # ── TestEmbeddingSimilarity ────────────────────────────────────────────────────
 
 
-@pytest.fixture(scope="module")
-def mini_lm_model():
-    from sentence_transformers import SentenceTransformer
-    return SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-
-
 class TestEmbeddingSimilarity:
-    def test_identical_texts_high_similarity(self, mini_lm_model):
-        texts = ["The patient's lab results show elevated glucose levels."] * 3
-        result = compute_embedding_similarity(texts, mini_lm_model)
-        assert result["mean"] > 0.99
+    def test_identical_embeddings_give_similarity_one(self):
+        vec = [1.0, 0.0, 0.0, 0.0]
+        br = _embedding_mock([vec, vec, vec])
+        result = compute_embedding_similarity(["a", "b", "c"], br)
+        assert result["mean"] == pytest.approx(1.0)
+        assert result["std"] == pytest.approx(0.0)
 
-    def test_output_dict_keys(self, mini_lm_model):
-        result = compute_embedding_similarity(["text a", "text b", "text c"], mini_lm_model)
+    def test_orthogonal_embeddings_give_similarity_zero(self):
+        br = _embedding_mock([
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ])
+        result = compute_embedding_similarity(["a", "b", "c"], br)
+        assert result["mean"] == pytest.approx(0.0)
+
+    def test_output_dict_keys(self):
+        vec = [1.0, 0.0]
+        br = _embedding_mock([vec, vec, vec])
+        result = compute_embedding_similarity(["a", "b", "c"], br)
         assert set(result.keys()) == {"n_runs", "n_pairs", "mean", "min", "max", "std", "variance", "cv"}
 
-    def test_return_is_pure_python(self, mini_lm_model):
-        """Validates the .cpu().numpy() + float() conversion chain — no torch.Tensor."""
-        result = compute_embedding_similarity(["text a", "text b", "text c"], mini_lm_model)
+    def test_return_is_pure_python(self):
+        vec = [0.5, 0.5]
+        br = _embedding_mock([vec, vec, vec])
+        result = compute_embedding_similarity(["a", "b", "c"], br)
         for key, val in result.items():
             if val is not None:
                 assert type(val) in (int, float), f"{key} returned {type(val)}"
 
-    def test_dissimilar_third_text_lowers_min(self, mini_lm_model):
-        texts = [
-            "The patient has elevated blood glucose.",
-            "Blood glucose levels are high in this patient.",
-            "The capital of France is Paris.",
-        ]
-        result = compute_embedding_similarity(texts, mini_lm_model)
+    def test_dissimilar_embedding_lowers_min(self):
+        br = _embedding_mock([
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],   # same as first — high similarity pair
+            [0.0, 0.0, 1.0],   # orthogonal — low similarity with both
+        ])
+        result = compute_embedding_similarity(["a", "b", "c"], br)
         assert result["min"] < result["mean"]
 
-
-# ── TestBertScoreSimilarity ────────────────────────────────────────────────────
-
-
-@pytest.mark.slow
-class TestBertScoreSimilarity:
-    @pytest.fixture(scope="class")
-    def bert_scorer(self):
-        from bert_score import BERTScorer
-        # distilbert-base-uncased is the smallest viable BERTScore model for CI.
-        # Size ~260 MB (unverified against current HuggingFace release).
-        return BERTScorer(model_type="distilbert-base-uncased", lang="en")
-
-    def test_identical_texts_f1_near_one(self, bert_scorer):
-        texts = ["The patient has elevated blood glucose levels."] * 3
-        result = compute_bertscore_similarity(texts, bert_scorer)
-        assert result["mean"] > 0.95
-
-    def test_f1_item_is_scalar(self, bert_scorer):
-        """Validates that .item() is called — scorer.score() returns torch.Tensor."""
-        result = compute_bertscore_similarity(["text one here", "text two there", "text three"], bert_scorer)
-        for key, val in result.items():
-            if val is not None:
-                assert type(val) in (int, float), f"{key} returned {type(val)}"
-
-    def test_cap_at_five_texts(self, bert_scorer):
-        """texts[:5] is applied before the loop — 7 inputs yield 10 pairs (5C2), not 21 (7C2)."""
-        texts = [f"Medical summary number {i}" for i in range(7)]
-        result = compute_bertscore_similarity(texts, bert_scorer)
-        assert result["n_runs"] == 5
-        assert result["n_pairs"] == 10
-
-    def test_output_dict_keys(self, bert_scorer):
-        result = compute_bertscore_similarity(["text one", "text two", "text three"], bert_scorer)
-        assert set(result.keys()) == {"n_runs", "n_pairs", "mean", "min", "max", "std", "variance", "cv"}
+    def test_invoke_model_called_once_per_text(self):
+        vec = [1.0, 0.0]
+        br = _embedding_mock([vec] * 4)
+        compute_embedding_similarity(["w", "x", "y", "z"], br)
+        assert br.invoke_model.call_count == 4
 
 
 # ── TestMultiRunOrchestration ──────────────────────────────────────────────────
 
 
 class TestMultiRunOrchestration:
-    """Validates run_evaluation() orchestration with Bedrock and ML functions mocked."""
+    """Validates run_evaluation() orchestration with Bedrock and metric functions mocked."""
 
     _STUB_STATS = {
         "n_runs": 3, "n_pairs": 3, "mean": 0.9, "min": 0.8,
@@ -267,6 +251,7 @@ class TestMultiRunOrchestration:
 
     @contextlib.contextmanager
     def _run_context(self, tmp_path, monkeypatch, *, n_runs: int = 3, temperature: float = 0.7):
+        """Sets up all mocks needed by run_evaluation() and yields (args, bedrock_mock)."""
         doc = tmp_path / "doc.txt"
         doc.write_text("Patient has elevated glucose.")
         prompt = tmp_path / "prompt.txt"
@@ -302,9 +287,7 @@ class TestMultiRunOrchestration:
         stub = {**self._STUB_STATS, "n_runs": n_runs}
 
         with mock.patch.object(_mod, "compute_embedding_similarity", return_value=stub), \
-             mock.patch.object(_mod, "compute_bertscore_similarity", return_value=stub), \
              mock.patch.object(_mod, "compute_tfidf_similarity", return_value=stub), \
-             mock.patch.object(_mod, "_load_models", return_value=(mock.MagicMock(), mock.MagicMock())), \
              mock.patch("boto3.client", return_value=bedrock_mock):
             yield args, bedrock_mock
 
@@ -328,4 +311,4 @@ class TestMultiRunOrchestration:
     def test_result_includes_all_metric_keys(self, tmp_path, monkeypatch):
         with self._run_context(tmp_path, monkeypatch) as (args, _):
             result = run_evaluation(args)
-        assert set(result["text_layer"].keys()) == {"embedding_cosine", "bertscore_f1", "tfidf_cosine"}
+        assert set(result["text_layer"].keys()) == {"embedding_cosine", "tfidf_cosine"}

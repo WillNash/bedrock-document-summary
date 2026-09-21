@@ -6,7 +6,7 @@ resource "aws_lambda_layer_version" "deps" {
   layer_name               = "${local.name_prefix}-deps"
   compatible_runtimes      = ["python3.12"]
   compatible_architectures = ["arm64"]
-  description              = "jinja2 and jsonschema for renderer and validator Lambdas"
+  description              = "jinja2, jsonschema, numpy, scikit-learn for Lambda functions"
 
   lifecycle {
     create_before_destroy = true
@@ -103,6 +103,12 @@ data "archive_file" "renderer" {
       filename = "templates/${source.value}.j2"
     }
   }
+}
+
+data "archive_file" "comparator" {
+  type        = "zip"
+  source_dir  = "${path.module}/../lambda/comparator"
+  output_path = "${path.module}/lambda_packages/comparator.zip"
 }
 
 data "archive_file" "fail_handler" {
@@ -366,6 +372,32 @@ resource "aws_lambda_function" "renderer" {
   logging_config {
     log_format = "JSON"
     log_group  = aws_cloudwatch_log_group.lambda["renderer"].name
+  }
+
+  tags = local.common_tags
+
+  depends_on = [aws_cloudwatch_log_group.lambda]
+}
+
+resource "aws_lambda_function" "comparator" {
+  function_name    = "${local.name_prefix}-comparator"
+  filename         = data.archive_file.comparator.output_path
+  source_code_hash = data.archive_file.comparator.output_base64sha256
+  handler          = "handler.lambda_handler"
+  runtime          = "python3.12"
+  architectures    = ["arm64"]
+  role             = aws_iam_role.comparator.arn
+  timeout          = 30
+  memory_size      = 256
+  layers           = [aws_lambda_layer_version.deps.arn]
+
+  tracing_config {
+    mode = "Active"
+  }
+
+  logging_config {
+    log_format = "JSON"
+    log_group  = aws_cloudwatch_log_group.lambda["comparator"].name
   }
 
   tags = local.common_tags

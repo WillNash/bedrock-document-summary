@@ -239,6 +239,111 @@ h2 {
   margin: 0.2rem 0;
 }
 
+/* ── Comparison panel ─────────────────────────────────────────────────────── */
+
+.comparison-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  margin: 1.75rem 0 0.9rem;
+  border-top: 1px solid #e9ecef;
+  padding-top: 1.5rem;
+}
+
+.comparison-subhead {
+  font-size: 0.82rem;
+  color: #6c757d;
+  font-weight: 400;
+}
+
+.comparison-metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+}
+
+@media (max-width: 520px) {
+  .comparison-metrics { grid-template-columns: 1fr; }
+}
+
+.metric-card {
+  background: #f8f9fa;
+  border: 1px solid #e9ecef;
+  border-radius: 8px;
+  padding: 0.85rem 1rem;
+}
+
+.metric-card-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #495057;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.6rem;
+}
+
+.metric-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.25rem;
+}
+
+.metric-stat {
+  text-align: center;
+}
+
+.metric-stat-label {
+  font-size: 0.68rem;
+  color: #868e96;
+  display: block;
+}
+
+.metric-stat-value {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #1a1a2e;
+}
+
+.comparison-matrix-heading {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #495057;
+  margin-bottom: 0.5rem;
+}
+
+.matrix-scroll {
+  overflow-x: auto;
+  margin-bottom: 0.5rem;
+}
+
+.sim-matrix {
+  border-collapse: collapse;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.sim-matrix th {
+  background: #f1f3f5;
+  color: #495057;
+  font-weight: 600;
+  padding: 0.3rem 0.5rem;
+  text-align: center;
+  border: 1px solid #dee2e6;
+}
+
+.sim-matrix td {
+  padding: 0.3rem 0.5rem;
+  text-align: center;
+  border: 1px solid #dee2e6;
+  font-variant-numeric: tabular-nums;
+}
+
+.sim-matrix td.diag { background: #f1f3f5; color: #6c757d; }
+.sim-matrix td.high  { background: #d3f9d8; color: #2b8a3e; }
+.sim-matrix td.mid   { background: #fff3bf; color: #e67700; }
+.sim-matrix td.low   { background: #ffe8cc; color: #d9480f; }
+
 .run-tile.queued     { background: #f1f3f5; color: #6c757d; }
 .run-tile.uploading  { background: #e7f5ff; color: #1971c2; }
 .run-tile.pending,

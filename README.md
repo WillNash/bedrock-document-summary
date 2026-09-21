@@ -136,13 +136,17 @@ frontend/       Vanilla JS SPA (config.js generated at deploy time by deploy_fro
 
 ### Evaluating output consistency
 
-`tools/consistency_evaluator.py` measures how much the pipeline's outputs vary across N runs of the same document. It calls Bedrock directly with a configurable temperature (default 0.7) and applies three metric layers to both the rendered summary and the extracted JSON:
+Two variants of the consistency evaluator measure how much the pipeline's outputs vary across N runs of the same document. Both call Bedrock directly with a configurable temperature (default 0.7) and are **pathway 1** of a planned two-pathway system; pathway 2 (measuring outputs against a gold standard reference) is a separate future tool.
+
+#### Local variant (`tools/consistency_evaluator.py`)
+
+Uses local ML models — no Bedrock embedding API calls required. Downloads models on first run (~440 MB PubMedBERT, ~260 MB distilbert for BERTScore).
 
 | Metric | Layer | Notes |
 |---|---|---|
-| Sentence embedding cosine | Text | `NeuML/pubmedbert-base-embeddings`; ~440 MB download on first use |
-| BERTScore F1 | Text | `microsoft/deberta-large-mnli`; capped at 5 texts for latency |
-| TF-IDF cosine | Text | Lightweight baseline; zero model download |
+| Embedding cosine | Text | `NeuML/pubmedbert-base-embeddings` via sentence-transformers |
+| BERTScore F1 | Text | `microsoft/deberta-large-mnli`; skip in CI with `-m "not slow"` |
+| TF-IDF cosine | Text | Lightweight baseline; zero downloads |
 | Field agreement | JSON | Plurality fraction across N extracted values per field |
 
 ```bash
@@ -157,7 +161,29 @@ python tools/consistency_evaluator.py \
   --output-json results.json
 ```
 
-The `--prompt` file must match the pinned Bedrock Prompt Management version used in production. This is **pathway 1** of a planned two-pathway evaluation system; pathway 2 (measuring N outputs against a gold standard reference) is a separate future tool.
+#### Cloud variant (`tools/consistency_evaluator_cloud.py`)
+
+Uses Bedrock Titan Text Embeddings v2 — no local model downloads. Runs anywhere boto3 runs (including Lambda). Requires active AWS credentials with Bedrock access.
+
+| Metric | Layer | Notes |
+|---|---|---|
+| Titan embedding cosine | Text | `amazon.titan-embed-text-v2:0` via Bedrock; ~$0.00002/1K tokens |
+| TF-IDF cosine | Text | Lightweight baseline; zero API cost |
+| Field agreement | JSON | Plurality fraction across N extracted values per field |
+
+```bash
+pip install numpy scikit-learn jinja2
+python tools/consistency_evaluator_cloud.py \
+  --doc-type lab_result \
+  --document path/to/doc.txt \
+  --prompt prompts/lab_result_prompt.txt \
+  --model-id us.anthropic.claude-sonnet-4-5-20250929-v1:0 \
+  --n-runs 5 \
+  --temperature 0.7 \
+  --output-json results.json
+```
+
+The `--prompt` file must match the pinned Bedrock Prompt Management version used in production.
 
 ### Adding a document type
 
