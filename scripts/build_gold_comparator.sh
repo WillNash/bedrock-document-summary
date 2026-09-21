@@ -45,8 +45,15 @@ fi
 
 ECR_URI="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}"
 
-# Resolve Lambda function name — soft fail during first-deploy bootstrapping
-FUNCTION_NAME=$(terraform -chdir="$INFRA_DIR" output -raw gold_comparator_function_name 2>/dev/null || true)
+# Resolve Lambda function name — soft fail during first-deploy bootstrapping.
+# 2>/dev/null suppresses stderr, but the setup-terraform CI wrapper can write
+# ::error:: annotations to stdout on failure, so validate the captured value.
+_RAW_FUNCTION_NAME=$(terraform -chdir="$INFRA_DIR" output -raw gold_comparator_function_name 2>/dev/null || true)
+if [[ "${_RAW_FUNCTION_NAME:-}" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+  FUNCTION_NAME="$_RAW_FUNCTION_NAME"
+else
+  FUNCTION_NAME=""
+fi
 
 # Authenticate with ECR
 aws ecr get-login-password --region "$AWS_REGION" | \
