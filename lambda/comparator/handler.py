@@ -1,11 +1,14 @@
 """
-POST /compare — consistency comparator Lambda.
+POST /compare — consistency comparator Lambda (stdlib only, no numpy/sklearn).
 
 Accepts a list of summary texts, fetches Titan Text Embeddings v2 for each,
 and returns pairwise cosine similarity (embedding + TF-IDF) with variability
 stats and the raw embedding vectors.
 
-Request body: {"texts": ["summary 1", "summary 2", ...]}   (2–20 entries)
+Titan returns pre-normalised vectors when normalize=True, so cosine similarity
+reduces to a dot product — no numpy required.
+
+Request body: {"texts": ["summary 1", "summary 2", ...]}   (2–200 entries)
 
 Response body:
 {
@@ -16,47 +19,83 @@ Response body:
 """
 
 import json
+import math
+import re
 import boto3
-import numpy as np
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
+from collections import Counter
+from itertools import combinations
 
 EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0"
 EMBEDDING_DIMENSIONS = 1024
 MAX_TEXTS = 200
 
 
-def _variability_stats(sim_matrix: np.ndarray) -> dict:
-    n = sim_matrix.shape[0]
-    idx = np.triu_indices(n, k=1)
-    scores = sim_matrix[idx]
-    mean = float(np.mean(scores))
+def _upper_triangle(matrix):
+    n = len(matrix)
+    return [matrix[i][j] for i, j in combinations(range(n), 2)]
+
+
+def _variability_stats(n_runs, scores):
+    n_pairs = len(scores)
+    mean = sum(scores) / n_pairs
+    variance = sum((s - mean) ** 2 for s in scores) / n_pairs
+    std = math.sqrt(variance)
     return {
-        "n_runs": int(n),
-        "n_pairs": int(len(scores)),
+        "n_runs": n_runs,
+        "n_pairs": n_pairs,
         "mean": mean,
-        "min": float(np.min(scores)),
-        "max": float(np.max(scores)),
-        "std": float(np.std(scores)),
-        "variance": float(np.var(scores)),
-        "cv": float(np.std(scores) / mean) if mean != 0 else None,
+        "min": min(scores),
+        "max": max(scores),
+        "std": std,
+        "variance": variance,
+        "cv": std / mean if mean != 0 else None,
     }
 
 
-def _ok(body: dict) -> dict:
-    return {
-        "statusCode": 200,
-        "headers": {"Content-Type": "application/json"},
-        "body": json.dumps(body),
-    }
+def _embedding_sim_matrix(embeddings):
+    """Cosine similarity via dot product (valid because Titan normalises vectors)."""
+    n = len(embeddings)
+    matrix = [[1.0 if i == j else 0.0 for j in range(n)] for i in range(n)]
+    for i, j in combinations(range(n), 2):
+        score = sum(a * b for a, b in zip(embeddings[i], embeddings[j]))
+        matrix[i][j] = matrix[j][i] = score
+    return matrix
 
 
-def _err(status: int, message: str) -> dict:
-    return {
-        "statusCode": status,
-        "headers": {"Content-Type": "application/json"},
-        "body": json.dumps({"error": message}),
-    }
+def _tokenize(text):
+    return re.findall(r'\b[a-z]{2,}\b', text.lower())
+
+
+def _tfidf_sim_matrix(texts):
+    n = len(texts)
+    tf_dicts = [Counter(_tokenize(t)) for t in texts]
+    all_terms = set(term for tf in tf_dicts for term in tf)
+
+    if not all_terms:
+        return [[1.0 if i == j else 0.0 for j in range(n)] for i in range(n)]
+
+    df = {term: sum(1 for tf in tf_dicts if term in tf) for term in all_terms}
+    idf = {term: math.log((n + 1) / (df[term] + 1)) + 1 for term in all_terms}
+
+    vectors = []
+    for tf in tf_dicts:
+        vec = {term: tf[term] * idf[term] for term in tf}
+        norm = math.sqrt(sum(v ** 2 for v in vec.values()))
+        vectors.append({t: v / norm for t, v in vec.items()} if norm > 0 else {})
+
+    matrix = [[1.0 if i == j else 0.0 for j in range(n)] for i in range(n)]
+    for i, j in combinations(range(n), 2):
+        score = sum(vectors[i].get(t, 0.0) * vectors[j].get(t, 0.0) for t in vectors[i])
+        matrix[i][j] = matrix[j][i] = score
+    return matrix
+
+
+def _ok(body):
+    return {"statusCode": 200, "headers": {"Content-Type": "application/json"}, "body": json.dumps(body)}
+
+
+def _err(status, message):
+    return {"statusCode": status, "headers": {"Content-Type": "application/json"}, "body": json.dumps({"error": message})}
 
 
 def lambda_handler(event, context):
@@ -79,32 +118,18 @@ def lambda_handler(event, context):
     for text in texts:
         response = bedrock.invoke_model(
             modelId=EMBEDDING_MODEL,
-            body=json.dumps(
-                {"inputText": text, "dimensions": EMBEDDING_DIMENSIONS, "normalize": True}
-            ),
+            body=json.dumps({"inputText": text, "dimensions": EMBEDDING_DIMENSIONS, "normalize": True}),
             contentType="application/json",
             accept="application/json",
         )
-        result = json.loads(response["body"].read())
-        embeddings.append(result["embedding"])
+        embeddings.append(json.loads(response["body"].read())["embedding"])
 
-    embeddings_np = np.array(embeddings)
-    emb_sim = cosine_similarity(embeddings_np)
-    emb_stats = _variability_stats(emb_sim)
+    n = len(embeddings)
+    emb_matrix = _embedding_sim_matrix(embeddings)
+    tfidf_matrix = _tfidf_sim_matrix(texts)
 
-    try:
-        tfidf_sim = cosine_similarity(TfidfVectorizer().fit_transform(texts))
-    except ValueError:
-        # Empty vocabulary (e.g. texts contain only stop-words or single chars).
-        # Return a zero-off-diagonal matrix so stats remain well-defined.
-        tfidf_sim = np.zeros((len(texts), len(texts)))
-        np.fill_diagonal(tfidf_sim, 1.0)
-    tfidf_stats = _variability_stats(tfidf_sim)
-
-    return _ok(
-        {
-            "embeddings": embeddings,
-            "embedding_cosine": {"matrix": emb_sim.tolist(), **emb_stats},
-            "tfidf_cosine": {"matrix": tfidf_sim.tolist(), **tfidf_stats},
-        }
-    )
+    return _ok({
+        "embeddings": embeddings,
+        "embedding_cosine": {"matrix": emb_matrix, **_variability_stats(n, _upper_triangle(emb_matrix))},
+        "tfidf_cosine":     {"matrix": tfidf_matrix, **_variability_stats(n, _upper_triangle(tfidf_matrix))},
+    })
