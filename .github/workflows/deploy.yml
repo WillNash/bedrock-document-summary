@@ -81,6 +81,9 @@ jobs:
             echo "INFO: Lambda not yet deployed or output unavailable, skipping update."
             exit 0
           fi
+          aws lambda wait function-updated \
+            --function-name "$FUNCTION_NAME" \
+            --region "${AWS_DEFAULT_REGION}"
           ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
           REPO=$(terraform -chdir=infra output -raw gold_comparator_ecr_repository_name 2>/dev/null || true)
           aws lambda update-function-code \
