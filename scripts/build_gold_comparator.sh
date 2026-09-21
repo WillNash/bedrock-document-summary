@@ -8,8 +8,6 @@
 #      (pushes image; exits cleanly if Lambda not yet created — see step 3)
 #   3. terraform -chdir=infra apply
 #      (creates Lambda function referencing the now-existing private image)
-#   4. ./scripts/build_gold_comparator.sh
-#      (re-run to apply Provisioned Concurrency to the initial version)
 #
 # SUBSEQUENT DEPLOYS (CI/CD — ECR and Lambda already exist):
 #   terraform -chdir=infra apply
@@ -69,7 +67,6 @@ if [ -z "$FUNCTION_NAME" ]; then
   echo "INFO: Image pushed to ECR successfully."
   echo "      Lambda function not yet deployed. Run:"
   echo "        terraform -chdir=infra apply"
-  echo "      Then re-run this script to apply Provisioned Concurrency."
   exit 0
 fi
 
@@ -79,22 +76,4 @@ aws lambda update-function-code \
   --image-uri "${ECR_URI}:latest" \
   --region "$AWS_REGION"
 
-# Wait for the update to complete — update-function-code is async; calling
-# publish-version while the function is Pending returns ResourceConflictException
-aws lambda wait function-updated \
-  --function-name "$FUNCTION_NAME" \
-  --region "$AWS_REGION"
-
-# Publish a new immutable version and pin Provisioned Concurrency to it
-VERSION=$(aws lambda publish-version \
-  --function-name "$FUNCTION_NAME" \
-  --region "$AWS_REGION" \
-  --query 'Version' --output text)
-
-aws lambda put-provisioned-concurrency-config \
-  --function-name "$FUNCTION_NAME" \
-  --qualifier "$VERSION" \
-  --provisioned-concurrent-executions 1 \
-  --region "$AWS_REGION"
-
-echo "Done: gold_comparator deployed ${ECR_URI}:latest → version ${VERSION} (Provisioned Concurrency: 1)"
+echo "Done: gold_comparator deployed ${ECR_URI}:latest"
