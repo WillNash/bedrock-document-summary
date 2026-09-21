@@ -48,11 +48,33 @@ jobs:
       - name: Ensure Bedrock guardrail
         run: ./scripts/ensure_guardrail.sh >> $GITHUB_ENV
 
-      - name: Terraform Apply
-        run: terraform -chdir=infra apply -auto-approve -input=false
+      - name: Create ECR repository
+        # Must exist before the image push and before the Lambda can be created.
+        # On subsequent deploys this is a fast no-op.
+        run: |
+          terraform -chdir=infra apply -auto-approve -input=false \
+            -target=aws_ecr_repository.gold_comparator \
+            -target=aws_ecr_lifecycle_policy.gold_comparator
 
       - name: Build and push gold_comparator image
         run: ./scripts/build_gold_comparator.sh
+
+      - name: Terraform Apply
+        run: terraform -chdir=infra apply -auto-approve -input=false
+
+      - name: Pin gold_comparator Lambda to latest image
+        # On first deploy the Lambda was just created pointing to :latest tag — this
+        # pins it to the specific digest pushed above. On subsequent deploys it updates
+        # the running Lambda to the new image (Terraform ignores image_uri changes).
+        run: |
+          FUNCTION_NAME=$(terraform -chdir=infra output -raw gold_comparator_function_name 2>/dev/null || true)
+          if [ -z "$FUNCTION_NAME" ]; then exit 0; fi
+          ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+          REPO=$(terraform -chdir=infra output -raw gold_comparator_ecr_repository_name)
+          aws lambda update-function-code \
+            --function-name "$FUNCTION_NAME" \
+            --image-uri "${ACCOUNT}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${REPO}:latest" \
+            --region "${AWS_DEFAULT_REGION}"
 
       - name: Deploy frontend
         run: ./scripts/deploy_frontend.sh
