@@ -5,8 +5,9 @@ ENV TRANSFORMERS_CACHE=/var/task/hf_cache \
     TOKENIZERS_PARALLELISM=false \
     TRANSFORMERS_OFFLINE=1
 
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu && \
-    pip install --no-cache-dir tokenizers==0.13.3 transformers bert-score==0.3.13
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+
+RUN pip install --no-cache-dir tokenizers==0.13.3 transformers bert-score==0.3.13
 
 RUN python -c "from bert_score import BERTScorer; BERTScorer(model_type='allenai/scibert_scivocab_uncased', num_layers=8, device='cpu')"
 
