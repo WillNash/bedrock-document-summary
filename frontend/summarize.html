@@ -3,17 +3,19 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Document Summarizer</title>
+  <title>Summarize — Document Summarizer</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <div id="app">
     <div class="card" id="main-card">
       <h1>Document Summarizer</h1>
+
       <div id="auth-section" class="hidden">
         <p>Sign in to upload and summarize medical documents.</p>
         <button id="signin-btn" class="btn-primary">Sign In</button>
       </div>
+
       <div id="upload-section" class="hidden">
         <div id="drop-zone" class="drop-zone">
           <p>Drag and drop a document here</p>
@@ -21,21 +23,24 @@
           <label class="btn-secondary" for="file-input">Choose File</label>
           <input type="file" id="file-input" class="hidden" accept=".txt,.md,.csv,.pdf" />
         </div>
+
         <div id="status-section" class="hidden">
           <div id="spinner" class="spinner"></div>
           <p id="status-text">Processing...</p>
         </div>
+
         <div id="summary-section" class="hidden">
           <h2>Summary</h2>
           <pre id="summary-content"></pre>
           <button id="new-upload-btn" class="btn-secondary">Upload Another</button>
         </div>
+
         <div id="error-section" class="hidden">
           <p class="error-text" id="error-message"></p>
           <button id="retry-btn" class="btn-secondary">Try Again</button>
         </div>
+
         <div class="signout-row">
-          <a href="summarize.html" class="btn-link">Summarize</a>
           <a href="test.html" class="btn-link">Consistency Test</a>
           <a href="gold.html" class="btn-link">Gold Standard Test</a>
           <button id="signout-btn" class="btn-link">Sign Out</button>
@@ -44,6 +49,6 @@
     </div>
   </div>
   <script src="config.js"></script>
-  <script src="app.js"></script>
+  <script src="summarize.js"></script>
 </body>
 </html>
