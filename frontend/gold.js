@@ -237,7 +237,7 @@ async function pollUntilDone(job_id, runNum) {
 
 // ── Gold comparison ───────────────────────────────────────────────────────────
 
-async function runGoldComparison(summaries, referenceText) {
+async function runGoldComparison(summaries, referenceText, attempt = 0) {
   if (!await ensureValidToken()) throw new Error('auth');
   const res = await fetch(`${API_URL}/gold-compare`, {
     method: 'POST',
@@ -245,6 +245,13 @@ async function runGoldComparison(summaries, referenceText) {
     body: JSON.stringify({ texts: summaries, reference: referenceText }),
   });
   if (res.status === 401) throw new Error('auth');
+  if (res.status === 503 && attempt === 0) {
+    // Lambda cold start: image pull + scibert model load can exceed API Gateway's 29s limit.
+    // Lambda continues initialising in the background — retry after 60s.
+    setHeader('BERTScore model is warming up (cold start) — retrying in 60 seconds…');
+    await new Promise(r => setTimeout(r, 60000));
+    return runGoldComparison(summaries, referenceText, 1);
+  }
   if (!res.ok) throw new Error(`gold-compare HTTP ${res.status}`);
   return res.json();
 }
