@@ -64,8 +64,8 @@ class TestValidation:
             resp = lambda_handler(_event(["only one"]), None)
         assert resp["statusCode"] == 400
 
-    def test_21_texts_returns_400(self):
-        texts = [f"text {i}" for i in range(21)]
+    def test_above_max_texts_returns_400(self):
+        texts = [f"text {i}" for i in range(201)]
         with mock.patch("boto3.client", return_value=mock.MagicMock()):
             resp = lambda_handler(_event(texts), None)
         assert resp["statusCode"] == 400
