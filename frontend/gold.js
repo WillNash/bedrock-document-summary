@@ -570,6 +570,7 @@ async function runGoldTest() {
       comparison = await runGoldComparison(summaries, referenceText);
     } catch (err) {
       if (err.message === 'auth') { handleSessionExpired(); return; }
+      setHeader(`Scoring failed: ${err.message} — zip will download without accuracy metrics.`);
     }
   }
 
