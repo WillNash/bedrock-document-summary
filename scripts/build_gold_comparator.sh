@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# Build, push, and deploy the gold_comparator Lambda container image.
+#
+# FIRST-DEPLOY BOOTSTRAPPING SEQUENCE:
+#   1. terraform -chdir=infra apply -target=aws_ecr_repository.gold_comparator \
+#                                   -target=aws_ecr_lifecycle_policy.gold_comparator
+#   2. ./scripts/build_gold_comparator.sh
+#      (pushes image; exits cleanly if Lambda not yet created — see step 3)
+#   3. terraform -chdir=infra apply
+#      (creates Lambda function referencing the now-existing private image)
+#   4. ./scripts/build_gold_comparator.sh
+#      (re-run to apply Provisioned Concurrency to the initial version)
+#
+# SUBSEQUENT DEPLOYS (CI/CD — ECR and Lambda already exist):
+#   terraform -chdir=infra apply
+#   ./scripts/build_gold_comparator.sh
+#
+# REQUIREMENTS:
+#   - Docker with buildx support (available on GitHub Actions ubuntu-latest)
+#   - AWS credentials with ECR push and Lambda update permissions
+#   - Internet access during docker build (downloads scibert weights ~440 MB on first build;
+#     subsequent builds use Docker layer cache)
+#
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INFRA_DIR="$SCRIPT_DIR/../infra"
+
+# Resolve AWS region
+AWS_REGION=${AWS_DEFAULT_REGION:-$(aws configure get region 2>/dev/null || true)}
+if [ -z "$AWS_REGION" ]; then
+  echo "ERROR: AWS region not set. Set AWS_DEFAULT_REGION or configure the aws default region."
+  exit 1
+fi
+
+# Resolve AWS account ID
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+
+# Resolve ECR repo name — hard fail if ECR not yet created (run targeted apply first)
+ECR_REPO_NAME=$(terraform -chdir="$INFRA_DIR" output -raw gold_comparator_ecr_repository_name 2>/dev/null || true)
+if [ -z "$ECR_REPO_NAME" ]; then
+  echo "ERROR: ECR repository not yet created. Run:"
+  echo "  terraform -chdir=infra apply -target=aws_ecr_repository.gold_comparator \\"
+  echo "                               -target=aws_ecr_lifecycle_policy.gold_comparator"
+  exit 1
+fi
+
+ECR_URI="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}"
+
+# Resolve Lambda function name — soft fail during first-deploy bootstrapping
+FUNCTION_NAME=$(terraform -chdir="$INFRA_DIR" output -raw gold_comparator_function_name 2>/dev/null || true)
+
+# Authenticate with ECR
+aws ecr get-login-password --region "$AWS_REGION" | \
+  docker login --username AWS --password-stdin "${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+
+# Build image (arm64, --provenance=false required for Lambda container image compatibility)
+docker buildx build \
+  --platform linux/arm64 \
+  --provenance=false \
+  -t "${ECR_URI}:latest" \
+  "$SCRIPT_DIR/../lambda/gold_comparator/"
+
+# Push image
+docker push "${ECR_URI}:latest"
+
+# First-deploy exit: Lambda not yet created — image is in ECR, run terraform apply next
+if [ -z "$FUNCTION_NAME" ]; then
+  echo "INFO: Image pushed to ECR successfully."
+  echo "      Lambda function not yet deployed. Run:"
+  echo "        terraform -chdir=infra apply"
+  echo "      Then re-run this script to apply Provisioned Concurrency."
+  exit 0
+fi
+
+# Update Lambda to use the new image digest
+aws lambda update-function-code \
+  --function-name "$FUNCTION_NAME" \
+  --image-uri "${ECR_URI}:latest" \
+  --region "$AWS_REGION"
+
+# Wait for the update to complete — update-function-code is async; calling
+# publish-version while the function is Pending returns ResourceConflictException
+aws lambda wait function-updated \
+  --function-name "$FUNCTION_NAME" \
+  --region "$AWS_REGION"
+
+# Publish a new immutable version and pin Provisioned Concurrency to it
+VERSION=$(aws lambda publish-version \
+  --function-name "$FUNCTION_NAME" \
+  --region "$AWS_REGION" \
+  --query 'Version' --output text)
+
+aws lambda put-provisioned-concurrency-config \
+  --function-name "$FUNCTION_NAME" \
+  --qualifier "$VERSION" \
+  --provisioned-concurrent-executions 1 \
+  --region "$AWS_REGION"
+
+echo "Done: gold_comparator deployed ${ECR_URI}:latest → version ${VERSION} (Provisioned Concurrency: 1)"

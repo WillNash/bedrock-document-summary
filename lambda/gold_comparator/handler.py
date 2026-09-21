@@ -1,29 +1,42 @@
 """
-POST /gold-compare — gold standard accuracy evaluator Lambda (stdlib only).
+POST /gold-compare — gold standard accuracy evaluator Lambda.
 
 Accepts a list of summary texts and a reference text, fetches Titan embeddings
-for each in parallel, and returns per-run embedding cosine similarity and
-ROUGE-1 F1 scores against the reference.
+for each in parallel, and computes per-run embedding cosine similarity and
+BERTScore F1 against the reference using allenai/scibert_scivocab_uncased.
+
+BERTScore F1 is calibrated for scientific/medical text. Typical range for
+similar texts: ~0.84–0.97 (not a 0-to-1 scale — scores below 0.84 indicate
+meaningful semantic divergence from the reference).
 
 Request body: {"texts": ["s1", "s2", ...], "reference": "gold text"}  (texts: 2–200)
+BERTScore cap: at most 20 texts per request due to CPU inference time.
 
 Response body:
 {
   "embedding_cosine": {"scores": [...], "mean": ..., "min": ..., "max": ..., "std": ..., "n": int},
-  "rouge1":           {"scores": [...], "mean": ..., "min": ..., "max": ..., "std": ..., "n": int}
+  "bertscore_f1":     {"scores": [...], "mean": ..., "min": ..., "max": ..., "std": ..., "n": int}
 }
 """
 
 import json
 import math
-import re
 import boto3
-from collections import Counter
+import torch
+from bert_score import BERTScorer
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0"
 EMBEDDING_DIMENSIONS = 1024
 MAX_TEXTS = 200
+BERTSCORE_MAX_TEXTS = 20
+
+_scorer = BERTScorer(
+    model_type="allenai/scibert_scivocab_uncased",
+    num_layers=8,
+    device="cpu",
+    rescale_with_baseline=False,
+)
 
 
 def _embed(bedrock, text):
@@ -38,21 +51,6 @@ def _embed(bedrock, text):
 
 def _cosine(a, b):
     return sum(x * y for x, y in zip(a, b))
-
-
-def _rouge1_f1(hypothesis, reference):
-    ref_tokens = re.findall(r'\b\w+\b', reference.lower())
-    hyp_tokens = re.findall(r'\b\w+\b', hypothesis.lower())
-    if not ref_tokens or not hyp_tokens:
-        return 0.0
-    ref_count = Counter(ref_tokens)
-    hyp_count = Counter(hyp_tokens)
-    overlap = sum(min(ref_count[t], hyp_count[t]) for t in ref_count)
-    recall = overlap / len(ref_tokens)
-    precision = overlap / len(hyp_tokens)
-    if precision + recall == 0:
-        return 0.0
-    return 2 * precision * recall / (precision + recall)
 
 
 def _score_stats(scores):
@@ -97,6 +95,9 @@ def lambda_handler(event, context):
     if not isinstance(reference, str) or not reference.strip():
         return _err(400, "reference must be a non-empty string")
 
+    if len(texts) > BERTSCORE_MAX_TEXTS:
+        return _err(400, f"BERTScore supports at most {BERTSCORE_MAX_TEXTS} texts per request due to CPU inference limits")
+
     bedrock = boto3.client("bedrock-runtime")
 
     text_embeddings = [None] * len(texts)
@@ -109,9 +110,13 @@ def lambda_handler(event, context):
     ref_embedding = _embed(bedrock, reference)
 
     emb_scores = [_cosine(te, ref_embedding) for te in text_embeddings]
-    rouge_scores = [_rouge1_f1(text, reference) for text in texts]
+
+    refs_repeated = [reference] * len(texts)
+    with torch.no_grad():
+        _P, _R, F1 = _scorer.score(cands=texts, refs=refs_repeated, verbose=False, batch_size=8)
+    bertscore_scores = [float(f) for f in (F1.tolist() if hasattr(F1, "tolist") else F1)]
 
     return _ok({
         "embedding_cosine": _score_stats(emb_scores),
-        "rouge1": _score_stats(rouge_scores),
+        "bertscore_f1": _score_stats(bertscore_scores),
     })

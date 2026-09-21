@@ -271,7 +271,7 @@ function showGoldPanel(comparison, succeededCount) {
 
   const metrics = [
     { key: 'embedding_cosine', title: 'Titan Embedding Cosine vs Reference' },
-    { key: 'rouge1',           title: 'ROUGE-1 F1 vs Reference' },
+    { key: 'bertscore_f1',     title: 'BERTScore F1 vs Reference (typical range ~0.84–0.97)' },
   ];
 
   for (const { key, title } of metrics) {
@@ -305,7 +305,7 @@ function showGoldPanel(comparison, succeededCount) {
   tableEl.innerHTML = '';
 
   const embScores = comparison.embedding_cosine.scores;
-  const rougeScores = comparison.rouge1.scores;
+  const bertScores = comparison.bertscore_f1.scores;
   const n = embScores.length;
 
   const table = document.createElement('table');
@@ -313,7 +313,7 @@ function showGoldPanel(comparison, succeededCount) {
 
   const thead = document.createElement('thead');
   const headerRow = document.createElement('tr');
-  ['Run', 'Emb Cosine', 'ROUGE-1 F1'].forEach(text => {
+  ['Run', 'Emb Cosine', 'BERTScore F1'].forEach(text => {
     const th = document.createElement('th');
     th.textContent = text;
     headerRow.appendChild(th);
@@ -334,10 +334,10 @@ function showGoldPanel(comparison, succeededCount) {
     embTd.textContent = embScores[i].toFixed(3);
     tr.appendChild(embTd);
 
-    const rougeTd = document.createElement('td');
-    rougeTd.className = _scoreCellClass(rougeScores[i]);
-    rougeTd.textContent = rougeScores[i].toFixed(3);
-    tr.appendChild(rougeTd);
+    const bertTd = document.createElement('td');
+    bertTd.className = _scoreCellClass(bertScores[i]);
+    bertTd.textContent = bertScores[i].toFixed(3);
+    tr.appendChild(bertTd);
 
     tbody.appendChild(tr);
   }
@@ -349,7 +349,7 @@ function showGoldPanel(comparison, succeededCount) {
 
 function buildGoldReport(docName, timestamp, succeededCount, comparison, referenceText) {
   const e = comparison.embedding_cosine;
-  const r = comparison.rouge1;
+  const r = comparison.bertscore_f1;
   const f = v => (typeof v === 'number' ? v.toFixed(4) : '—');
 
   const refPreview = referenceText.length > 80
@@ -368,19 +368,19 @@ function buildGoldReport(docName, timestamp, succeededCount, comparison, referen
     `  Mean   : ${f(e.mean)}    Min : ${f(e.min)}    Max : ${f(e.max)}`,
     `  Std Dev: ${f(e.std)}`,
     '',
-    '── ROUGE-1 F1 vs Reference ──',
+    '── BERTScore F1 vs Reference (typical range ~0.84–0.97) ──',
     `  Mean   : ${f(r.mean)}    Min : ${f(r.min)}    Max : ${f(r.max)}`,
     `  Std Dev: ${f(r.std)}`,
     '',
     '── Per-Run Scores ──',
-    `${'Run'.padEnd(5)} ${'Emb Cosine'.padEnd(12)} ${'ROUGE-1 F1'}`,
-    `${'---'.padEnd(5)} ${'----------'.padEnd(12)} ${'----------'}`,
+    `${'Run'.padEnd(5)} ${'Emb Cosine'.padEnd(12)} ${'BERTScore F1'}`,
+    `${'---'.padEnd(5)} ${'----------'.padEnd(12)} ${'------------'}`,
   ];
 
   const embScores = comparison.embedding_cosine.scores;
-  const rougeScores = comparison.rouge1.scores;
+  const bertScores = comparison.bertscore_f1.scores;
   const rows = embScores.map((emb, i) =>
-    `R${String(i + 1).padStart(2, '0')}   ${emb.toFixed(4).padEnd(12)} ${rougeScores[i].toFixed(4)}`
+    `R${String(i + 1).padStart(2, '0')}   ${emb.toFixed(4).padEnd(12)} ${bertScores[i].toFixed(4)}`
   );
 
   return [...header, ...rows, ''].join('\n');

@@ -1,491 +1,358 @@
 # Architecture Plan
 
-## Canonical Filename Notice
-
-**IMPORTANT — filename authority:** The canonical filenames for this feature are `gold.html` and `gold.js`. The explorer document (`claude-context-explorer.md`) uses the names `gold-standard.html` and `gold-standard.js` in its summary section. Those names are superseded by this plan. All references — HTML `<a href>` attributes, `<script src>` attributes, navigation links, zip manifest text, and test instructions — must use `gold.html` and `gold.js` exactly.
-
----
-
 ## Context Summary
 
-Add a "Gold Standard" evaluation page (Pathway 2) to the frontend that allows a user to run N pipeline jobs against a single uploaded reference text, then calls a new dedicated `POST /gold-compare` Lambda endpoint to compute per-run embedding cosine similarity and ROUGE-1 F1 scores against the reference — answering "how accurate is the pipeline?" The new Lambda, IAM role, API route, and frontend page are all completely separate from the existing Pathway 1 (`/compare`) infrastructure.
+Replace ROUGE-1 F1 with BERTScore F1 in the `POST /gold-compare` Lambda (`gold_comparator`). Because `bert-score` + CPU-only PyTorch exceeds the 250 MB unzipped Lambda layer limit, the Lambda must be converted from a zip-packaged function to a container image (up to 10 GB). The model weights (~440 MB for `allenai/scibert_scivocab_uncased`) are baked into the image at build time so no HuggingFace download occurs at runtime. All downstream consumers (tests, frontend) must be updated to use the new `bertscore_f1` response key.
 
 ---
 
 ## Impacted Files
 
 ### New files to create
-
-| File | Purpose |
-|---|---|
-| `lambda/gold_comparator/handler.py` | New Lambda handler: accepts `{texts, reference}`, returns per-run embedding cosine + ROUGE-1 scores with mean/min/max/std |
-| `tests/test_gold_comparator.py` | Unit tests for the new Lambda (mirrors `tests/test_comparator.py` structure) |
-| `frontend/gold.html` | New page: same structure as `test.html` with an additional reference file picker |
-| `frontend/gold.js` | Page logic: job submission/polling identical to `test.js`, plus reference file reading, call to `POST /gold-compare`, results panel, zip download |
+- `lambda/gold_comparator/Dockerfile` — container image definition (Python 3.12 Lambda base, CPU torch, bert-score, pre-cached model weights)
+- `scripts/build_gold_comparator.sh` — script to build and push the ECR image, update Lambda function code
 
 ### Existing files to modify
-
-| File | Change |
-|---|---|
-| `infra/cloudwatch.tf` | Append `"gold-comparator"` to `lambda_function_names` list (line 10) |
-| `infra/lambda.tf` | Add `data.archive_file.gold_comparator` block and `aws_lambda_function.gold_comparator` resource |
-| `infra/iam.tf` | Add `aws_iam_role.gold_comparator`, `aws_iam_role_policy.gold_comparator_logs`, `aws_iam_role_policy.gold_comparator_bedrock`, `aws_iam_role_policy.gold_comparator_xray` |
-| `infra/api_gateway.tf` | Add `aws_apigatewayv2_integration.gold_comparator`, `aws_apigatewayv2_route.gold_compare`, `aws_lambda_permission.apigw_gold_comparator` |
-| `frontend/test.html` | Add nav link to `gold.html` in the `signout-row` |
-| `frontend/index.html` | Add nav link to `gold.html` in the `signout-row` |
+- `lambda/gold_comparator/handler.py` — replace `_rouge1_f1` with BERTScorer at module level; change response key `rouge1` → `bertscore_f1`; add N cap for BERTScore
+- `infra/lambda.tf` — remove `data "archive_file" "gold_comparator"`; convert `aws_lambda_function.gold_comparator` to `package_type = "Image"`; add `aws_ecr_repository.gold_comparator`; raise `memory_size` to 5120 and `timeout` to 120
+- `frontend/gold.js` — update `showGoldPanel()` metrics array, table column headers, `buildGoldReport()` labels, and `_scoreCellClass` threshold note; change `rouge1` → `bertscore_f1` everywhere; add BERTScore scale note to UI
+- `tests/test_gold_comparator.py` — mock `bert_score.BERTScorer` before module load; update key assertions from `rouge1` → `bertscore_f1`; update ROUGE-specific test cases to test BERTScore behaviour
+- `.github/workflows/deploy.yml` — add Docker build and ECR push step before `terraform apply`
 
 ---
 
 ## Step-by-Step Execution Plan
 
-### Step 1 — Create `lambda/gold_comparator/handler.py`
+### Step 1 — Write the Dockerfile
 
-Create the directory `lambda/gold_comparator/` and write `handler.py`.
+Create `/workspace/active_repo/lambda/gold_comparator/Dockerfile`.
 
-**Request contract:**
-```
-POST /gold-compare
-Authorization: Bearer <id_token>
-Content-Type: application/json
+- Base image: `public.ecr.aws/lambda/python:3.12` (Amazon Linux 2023, arm64-compatible via buildx `--platform linux/arm64`)
+- Install CPU-only PyTorch from `https://download.pytorch.org/whl/cpu` first (avoids the multi-GB CUDA wheel that would come from PyPI)
+- Install `transformers` and `bert-score` (pinned to `==0.3.13` to match `tools/requirements.txt`)
+- Set env vars: `TRANSFORMERS_CACHE=/var/task/hf_cache`, `HF_HOME=/var/task/hf_cache`, `TOKENIZERS_PARALLELISM=false`
+- Pre-bake model weights at image build time by running a Python one-liner that instantiates `BERTScorer(model_type="allenai/scibert_scivocab_uncased", num_layers=8)` — this triggers HuggingFace `from_pretrained()` downloads into `/var/task/hf_cache` while building, so the Lambda never needs outbound internet access for model fetching
+- `COPY handler.py ${LAMBDA_TASK_ROOT}`
+- `CMD ["handler.lambda_handler"]`
 
-{
-  "texts": ["summary_1", "summary_2", ...],   // 2–200 strings
-  "reference": "gold standard reference text"  // 1 non-empty string
-}
-```
+Key constraints:
+- Build must use `docker buildx build --platform linux/arm64 --provenance=false` (provenance=false is mandatory for Lambda compatibility, as confirmed by official AWS docs)
+- The `/var/task/hf_cache` directory is part of the image layer, not `/tmp`, so it is read-only at runtime — which is correct for pre-baked weights
 
-**Response contract (200 OK):**
-```json
-{
-  "embedding_cosine": {
-    "scores": [0.87, 0.91, ...],
-    "mean": float,
-    "min": float,
-    "max": float,
-    "std": float,
-    "n": int
-  },
-  "rouge1": {
-    "scores": [0.62, 0.71, ...],
-    "mean": float,
-    "min": float,
-    "max": float,
-    "std": float,
-    "n": int
-  }
-}
-```
+### Step 2 — Rewrite the Lambda handler
 
-**Metric scope — no TF-IDF:** No `tfidf_cosine` metric is computed or returned. TF-IDF is excluded because ROUGE-1 already provides lexical overlap measurement and the two are redundant for gold-standard evaluation. The response top-level keys are exactly `{"embedding_cosine", "rouge1"}` — no others.
+Modify `/workspace/active_repo/lambda/gold_comparator/handler.py`:
 
-**Validation order:** Validate in this order, returning on the first failure:
-1. JSON parseable (return 400 if `json.loads` raises).
-2. `texts` present and is a list (return 400 if key absent or value is not a list).
-3. `texts` length 2–200 (return 400 if fewer than 2 or more than 200).
-4. All entries in `texts` are strings (return 400 if any entry is not a `str`).
-5. `reference` present and non-empty string (return 400 if key absent, value is not a `str`, or value is empty after stripping).
+1. Remove the `re`, `Counter`, and `_rouge1_f1` function entirely.
+2. Add imports: `import torch` and `from bert_score import BERTScorer`
+3. Add a module-level constant `BERTSCORE_MAX_TEXTS = 20` — BERTScore on CPU at N=200 would exceed the 29-second API Gateway limit. The existing Bedrock embedding path still accepts up to 200 texts; BERTScore is capped separately. N=20 is chosen conservatively based on AWS blog data (up to 25 seconds for distilbert at 5 GB memory); scibert is larger so the cap is kept tight.
+4. Instantiate `_scorer` at module level (outside `lambda_handler`):
+   ```python
+   _scorer = BERTScorer(
+       model_type="allenai/scibert_scivocab_uncased",
+       num_layers=8,
+       device="cpu",
+       rescale_with_baseline=False,
+   )
+   ```
+   Module-level init is critical: warm Lambda invocations reuse the already-loaded model, eliminating the ~5-second model-load overhead on every call.
+5. In `lambda_handler`, after validation, add a secondary check: if `len(texts) > BERTSCORE_MAX_TEXTS`, return a 400 error with a clear message explaining the BERTScore cap (e.g., `f"BERTScore supports at most {BERTSCORE_MAX_TEXTS} texts per request due to CPU inference limits"`).
+6. Replace the ROUGE scoring block with:
+   ```python
+   refs_repeated = [reference] * len(texts)
+   with torch.no_grad():
+       _P, _R, F1 = _scorer.score(cands=texts, refs=refs_repeated,
+                                   verbose=False, batch_size=8)
+   bertscore_scores = [float(f) for f in F1.tolist()]
+   ```
+7. Update the return value: replace `"rouge1": _score_stats(rouge_scores)` with `"bertscore_f1": _score_stats(bertscore_scores)`. The `_score_stats` helper is unchanged.
+8. Update the module docstring to reflect the new metric and the BERTScore scale note ([0.84, 0.97] typical range, not [0, 1]).
 
-**Implementation details:**
+### Step 3 — Add ECR repository and update Lambda Terraform resource
 
-- Module-level constants: `EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0"`, `EMBEDDING_DIMENSIONS = 1024`, `MAX_TEXTS = 200`.
-- Embedding calls: use `concurrent.futures.ThreadPoolExecutor` to call `bedrock-runtime.invoke_model` for all N texts in parallel; make one additional sequential call for the reference embedding. This keeps total Bedrock latency well within the 30-second API Gateway hard limit for reasonable N values. Each call uses `{"inputText": text, "dimensions": 1024, "normalize": True}` and reads `response["body"].read()` then parses `["embedding"]`.
-- Cosine similarity: for each text embedding, `sum(a * b for a, b in zip(text_emb, ref_emb))`. Because Titan returns unit-normalised vectors (`normalize=True`), this equals the cosine similarity exactly with no division step needed.
-- ROUGE-1 F1: pure stdlib implementation. Tokenize with `re.findall(r'\b\w+\b', text.lower())` to strip punctuation. Compute clipped overlap (sum of `min(ref_count[t], hyp_count[t])` for each token in the reference). Compute recall = overlap/len(ref_tokens), precision = overlap/len(hyp_tokens), F1 = 2*p*r/(p+r) if (p+r)>0 else 0.0.
-- Stats helper `_score_stats(scores)`: returns `{"scores": scores, "mean": ..., "min": ..., "max": ..., "std": ..., "n": len(scores)}`. Std uses population formula: `sum((x - mean)**2 for x in scores) / len(scores)` then `sqrt`. This divides by `len(scores)` (= N texts). This differs from the pairwise comparator's `_variability_stats` which divides by `n_pairs` (the upper-triangle count, not N). Both use population std — they are not interchangeable and must not be confused.
-- Helper functions `_ok(body)` and `_err(status, message)` following the exact same pattern as the existing comparator.
-- No environment variables required. No DynamoDB, S3, or KMS access needed.
+Modify `/workspace/active_repo/infra/lambda.tf`:
 
-**Error responses:**
-- 400: JSON not parseable, missing or non-list `texts`, fewer than 2 texts, more than 200 texts, non-string entries in `texts`, missing or empty `reference`
-- 500: unhandled exception (let Lambda runtime surface it; do not catch broadly)
+1. Remove the `data "archive_file" "gold_comparator"` block (lines 114–118). Terraform no longer manages the artifact; the deploy script pushes it.
 
-### Step 2 — Create `tests/test_gold_comparator.py`
+2. Add a new `aws_ecr_repository` resource and lifecycle policy:
+   ```hcl
+   resource "aws_ecr_repository" "gold_comparator" {
+     name                 = "${local.name_prefix}-gold-comparator"
+     image_tag_mutability = "MUTABLE"
+     force_delete         = true
 
-Mirror the structure of `tests/test_comparator.py`. Load the handler via `importlib.util.spec_from_file_location` pointing to `lambda/gold_comparator/handler.py`.
+     image_scanning_configuration {
+       scan_on_push = true
+     }
 
-**Helper functions:**
+     tags = local.common_tags
+   }
 
-`_bedrock_mock(input_text_to_vec)` — builds a thread-safe mock keyed by input text content (not call order), because `gold_comparator` uses `ThreadPoolExecutor` and call completion order is non-deterministic. Implement as a named function with `*args, **kwargs` and a fallback for positional body argument:
+   resource "aws_ecr_lifecycle_policy" "gold_comparator" {
+     repository = aws_ecr_repository.gold_comparator.name
+     policy = jsonencode({
+       rules = [{
+         rulePriority = 1
+         description  = "Keep only the 3 most recent images"
+         selection = {
+           tagStatus   = "any"
+           countType   = "imageCountMoreThan"
+           countNumber = 3
+         }
+         action = { type = "expire" }
+       }]
+     })
+   }
+   ```
 
-```python
-def _bedrock_mock(input_text_to_vec):
-    client = mock.MagicMock()
-    def _side_effect(*args, **kwargs):
-        body_bytes = kwargs.get('body') or (args[1] if len(args) > 1 else b'{}')
-        input_text = json.loads(body_bytes)['inputText']
-        return _make_response(input_text_to_vec[input_text])
-    client.invoke_model.side_effect = _side_effect
-    return client
-```
+3. Replace `aws_lambda_function.gold_comparator` entirely. The new resource:
+   - Removes: `filename`, `source_code_hash`, `handler`, `runtime` attributes
+   - Removes: `publish = true` (version publishing is handled by the deploy script, not Terraform, to avoid Provisioned Concurrency pinning to stale code)
+   - Adds: `package_type = "Image"` and `image_uri = "${aws_ecr_repository.gold_comparator.repository_url}:latest"`
+   - Adds: `lifecycle { ignore_changes = [image_uri] }` — Terraform sets the initial image URI after the real image is pushed; subsequent updates are handled by the deploy script via `update-function-code`
+   - Increases: `memory_size = 5120` (matching AWS ML blog recommendation) and `timeout = 120`
+   - Keeps: `architectures = ["arm64"]`, role, tracing_config, logging_config, tags, depends_on
 
-`_event(texts, reference)`: returns `{"body": json.dumps({"texts": texts, "reference": reference})}`.
+4. Add two outputs so the deploy script can resolve names without hardcoding:
+   ```hcl
+   output "gold_comparator_ecr_repository_name" {
+     value = aws_ecr_repository.gold_comparator.name
+   }
 
-**Test classes:**
+   output "gold_comparator_function_name" {
+     value = aws_lambda_function.gold_comparator.function_name
+   }
+   ```
 
-`TestValidation`:
-- `test_missing_texts_returns_400`
-- `test_missing_reference_returns_400`
-- `test_empty_reference_returns_400`
-- `test_single_text_returns_400` (texts list has only 1 entry)
-- `test_above_max_texts_returns_400` (201 entries)
-- `test_non_string_text_entry_returns_400`
-- `test_invalid_json_returns_400`
+### Step 4 — Write the build and deploy script
 
-`TestResponseStructure`:
-- `test_200_for_valid_input`
-- `test_top_level_keys` (must be exactly `{"embedding_cosine", "rouge1"}`)
-- `test_tfidf_not_in_response` (assert `"tfidf_cosine"` is NOT a key in the response body)
-- `test_stats_keys_in_each_metric` (must be `{"scores", "mean", "min", "max", "std", "n"}`)
-- `test_scores_length_matches_texts_count`
-- `test_n_matches_texts_count`
+Create `/workspace/active_repo/scripts/build_gold_comparator.sh` and mark it executable (`chmod +x`):
 
-`TestMetricCorrectness`:
-- `test_identical_embedding_gives_score_one`: reference vec = text vec = `[1.0, 0.0, 0.0]`, expect embedding_cosine scores all ≈ 1.0
-- `test_orthogonal_embedding_gives_score_zero`: reference vec orthogonal to all text vecs, expect all ≈ 0.0
-- `test_rouge1_identical_texts_score_one`: reference and all texts identical string, expect rouge1 scores all ≈ 1.0
-- `test_rouge1_disjoint_texts_score_zero`: reference "apple banana", texts "cat dog elephant", expect rouge1 scores ≈ 0.0
-- `test_invoke_model_called_n_plus_one_times`: N texts + 1 reference = N+1 calls total
-- `test_all_values_are_plain_python_types`: no numpy floats, no custom objects in numeric fields
-- `test_mean_is_average_of_scores`: verify `mean == sum(scores)/len(scores)` within floating-point tolerance
+The script must:
+1. Near the top, resolve and validate the AWS region:
+   ```bash
+   AWS_REGION=${AWS_DEFAULT_REGION:-$(aws configure get region)}
+   if [ -z "$AWS_REGION" ]; then
+     echo "ERROR: AWS region not set. Set AWS_DEFAULT_REGION or configure aws default region."
+     exit 1
+   fi
+   ```
+2. Resolve the AWS account ID via `aws sts get-caller-identity`
+3. Resolve the ECR repo name and Lambda function name from `terraform output`
+4. Authenticate with ECR via `aws ecr get-login-password | docker login`
+5. Build the image with `docker buildx build --platform linux/arm64 --provenance=false`
+6. Push the image with `docker push`
+7. Call `aws lambda update-function-code --image-uri <ecr-uri>:latest` to pin the Lambda to the new digest
+8. Immediately after `update-function-code`, publish a new version and configure Provisioned Concurrency on it:
+   ```bash
+   VERSION=$(aws lambda publish-version --function-name "$FUNCTION_NAME" --query 'Version' --output text)
+   aws lambda put-provisioned-concurrency-config --function-name "$FUNCTION_NAME" --qualifier "$VERSION" --provisioned-concurrent-executions 1
+   ```
 
-### Step 3 — Update `infra/cloudwatch.tf`
+Include a guard: if `terraform output gold_comparator_ecr_repository_name` returns empty (Terraform not yet applied), print a clear error and exit non-zero.
 
-In the `lambda_function_names` list (currently 10 entries ending with `"comparator"`), append `"gold-comparator"` as the 11th entry. This creates the log group `/aws/lambda/${local.name_prefix}-gold-comparator` that the Lambda's `logging_config` block references.
+Include a comment block explaining the bootstrapping order for first deploy and subsequent deploys (see Risk 2 mitigation below).
 
-```hcl
-locals {
-  lambda_function_names = [
-    "api-presign", "api-status", "api-summary",
-    "pipeline-starter",
-    "classifier", "extractor", "validator", "renderer",
-    "fail-handler",
-    "comparator",
-    "gold-comparator",   # ← add this line
-  ]
-}
-```
+### Step 5 — Update the deploy workflow
 
-### Step 4 — Update `infra/iam.tf`
+Modify `/workspace/active_repo/.github/workflows/deploy.yml`:
 
-Append a new IAM role block after the `comparator` role block (before the `fail_handler` role). Four resources, copied verbatim from the comparator role pattern:
-
-```hcl
-# ── gold_comparator role ─────────────────────────────────────────────────────
-
-resource "aws_iam_role" "gold_comparator" {
-  name               = "${local.name_prefix}-gold-comparator-role"
-  assume_role_policy = data.aws_iam_policy_document.lambda_trust.json
-  tags               = local.common_tags
-}
-
-resource "aws_iam_role_policy" "gold_comparator_logs" {
-  name = "cloudwatch-logs"
-  role = aws_iam_role.gold_comparator.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
-      Resource = "arn:aws:logs:*:${local.account_id}:log-group:/aws/lambda/${local.name_prefix}-gold-comparator:*"
-    }]
-  })
-}
-
-resource "aws_iam_role_policy" "gold_comparator_bedrock" {
-  name = "bedrock-invoke"
-  role = aws_iam_role.gold_comparator.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = ["bedrock:InvokeModel"]
-      Resource = ["*"]
-    }]
-  })
-}
-
-resource "aws_iam_role_policy" "gold_comparator_xray" {
-  name = "xray"
-  role = aws_iam_role.gold_comparator.id
-  policy = jsonencode({
-    Version   = "2012-10-17"
-    Statement = [{ Effect = "Allow", Action = local.xray_actions, Resource = "*" }]
-  })
-}
+Add a step after `Terraform Apply` and before `Deploy frontend`:
+```yaml
+- name: Build and push gold_comparator image
+  run: ./scripts/build_gold_comparator.sh
 ```
 
-### Step 5 — Update `infra/lambda.tf`
+The step must come after `Terraform Apply` because the ECR repository must exist before the image can be pushed. The Provisioned Concurrency configuration is applied inside `build_gold_comparator.sh` after each image push.
 
-Add two blocks. First, the archive data source (after the `comparator` archive block, before `fail_handler`):
+No Docker-in-Docker or additional setup is needed — GitHub Actions `ubuntu-latest` runners have Docker and buildx available by default.
 
-```hcl
-data "archive_file" "gold_comparator" {
-  type        = "zip"
-  source_dir  = "${path.module}/../lambda/gold_comparator"
-  output_path = "${path.module}/lambda_packages/gold_comparator.zip"
-}
-```
+### Step 6 — Update frontend/gold.js
 
-Second, the Lambda function resource (after `aws_lambda_function.comparator`, before `aws_lambda_function.fail_handler`):
+Modify `/workspace/active_repo/frontend/gold.js`:
 
-```hcl
-resource "aws_lambda_function" "gold_comparator" {
-  function_name    = "${local.name_prefix}-gold-comparator"
-  filename         = data.archive_file.gold_comparator.output_path
-  source_code_hash = data.archive_file.gold_comparator.output_base64sha256
-  handler          = "handler.lambda_handler"
-  runtime          = "python3.12"
-  architectures    = ["arm64"]
-  role             = aws_iam_role.gold_comparator.arn
-  timeout          = 30
-  memory_size      = 256
+1. In `showGoldPanel()`, update the `metrics` array (lines 272–275):
+   ```js
+   const metrics = [
+     { key: 'embedding_cosine', title: 'Titan Embedding Cosine vs Reference' },
+     { key: 'bertscore_f1',     title: 'BERTScore F1 vs Reference (typical range ~0.84–0.97)' },
+   ];
+   ```
 
-  tracing_config {
-    mode = "Active"
-  }
+2. In `showGoldPanel()`, update the variable reading comparison scores (line 308):
+   - Change `const rougeScores = comparison.rouge1.scores;` to `const bertScores = comparison.bertscore_f1.scores;`
 
-  logging_config {
-    log_format = "JSON"
-    log_group  = aws_cloudwatch_log_group.lambda["gold-comparator"].name
-  }
+3. Update the table column header array (line 316):
+   - Change `['Run', 'Emb Cosine', 'ROUGE-1 F1']` to `['Run', 'Emb Cosine', 'BERTScore F1']`
 
-  tags       = local.common_tags
-  depends_on = [aws_cloudwatch_log_group.lambda]
-}
-```
+4. In the per-run table loop (lines 336–341):
+   - Change `rougeTd` variable to `bertTd`
+   - Change `rougeScores[i]` to `bertScores[i]`
+   - The `_scoreCellClass` thresholds (0.8 for "high", 0.6 for "mid") will consistently colour BERTScore values as "high" since scibert F1 for similar texts falls in [0.84, 0.97]. This is acceptable behaviour — all scores look green which is informative. No threshold change is required since the scale note in the title communicates the context.
 
-Note: `timeout = 30` matches the existing comparator and the hard API Gateway limit. The ThreadPoolExecutor parallelism in the handler means N concurrent Bedrock calls for text embeddings + 1 sequential call for the reference, so actual wall-clock time for N=10 will be approximately max(individual_call_latency) + 1 call ≈ 1–2 seconds. Only at very high N with very large texts (approaching 8K tokens each) would this approach the 30-second limit.
+5. In `buildGoldReport()` (lines 350–387):
+   - Change `const r = comparison.rouge1;` to `const r = comparison.bertscore_f1;`
+   - Change the section header string from `'── ROUGE-1 F1 vs Reference ──'` to `'── BERTScore F1 vs Reference (typical range ~0.84–0.97) ──'`
+   - Change the per-run column header from `'ROUGE-1 F1'` to `'BERTScore F1'`
+   - Change `const rougeScores = comparison.rouge1.scores;` to `const bertScores = comparison.bertscore_f1.scores;`
+   - Update row builder: change `rougeScores[i].toFixed(4)` to `bertScores[i].toFixed(4)`
 
-### Step 6 — Update `infra/api_gateway.tf`
+### Step 7 — Update tests/test_gold_comparator.py
 
-Append three blocks after the existing comparator blocks. Add them in the same section ordering used by the existing file (integrations section, then routes section, then permissions section):
+Modify `/workspace/active_repo/tests/test_gold_comparator.py`:
 
-```hcl
-# Integration
-resource "aws_apigatewayv2_integration" "gold_comparator" {
-  api_id                 = aws_apigatewayv2_api.main.id
-  integration_type       = "AWS_PROXY"
-  integration_uri        = aws_lambda_function.gold_comparator.invoke_arn
-  payload_format_version = "2.0"
-}
+1. Before the existing `importlib` / `exec_module` block, inject a `bert_score` mock into `sys.modules` so the handler's top-level import and module-level `_scorer` instantiation resolve without loading any model:
 
-# Route
-resource "aws_apigatewayv2_route" "gold_compare" {
-  api_id             = aws_apigatewayv2_api.main.id
-  route_key          = "POST /gold-compare"
-  authorization_type = "JWT"
-  authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
-  target             = "integrations/${aws_apigatewayv2_integration.gold_comparator.id}"
-}
+   ```python
+   import sys
+   import types
+   from unittest import mock
 
-# Lambda permission
-resource "aws_lambda_permission" "apigw_gold_comparator" {
-  statement_id  = "AllowAPIGatewayInvokeGoldComparator"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.gold_comparator.function_name
-  principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_apigatewayv2_api.main.execution_arn}/*/*"
-}
-```
+   # --- Mock bert_score before handler module is loaded ---
+   _mock_scorer_instance = mock.MagicMock()
 
-### Step 7 — Create `frontend/gold.html`
+   def _fake_score(cands, refs, verbose=False, batch_size=8):
+       # Return (P, R, F1) as mock objects with .tolist()
+       n = len(cands)
+       f1_vals = [0.91] * n
+       f1_mock = mock.MagicMock()
+       f1_mock.tolist.return_value = f1_vals
+       p_mock = mock.MagicMock()
+       r_mock = mock.MagicMock()
+       return p_mock, r_mock, f1_mock
 
-Structure mirrors `test.html` with these differences:
+   _mock_scorer_instance.score.side_effect = _fake_score
+   _mock_bertscore_cls = mock.MagicMock(return_value=_mock_scorer_instance)
+   _mock_bert_score_module = types.ModuleType('bert_score')
+   _mock_bert_score_module.BERTScorer = _mock_bertscore_cls
+   sys.modules['bert_score'] = _mock_bert_score_module
+   ```
 
-- Title: `Gold Standard Test — Document Summarizer`
-- H1: `Gold Standard Test`
-- Auth section paragraph: `Sign in to run a gold standard accuracy test.`
-- Config row: TWO file-area blocks stacked in a `.config-row` (or two separate rows). First row: document file picker (`#doc-input`, label "Choose Document") + runs spinner + "Run Test" button. Second row: reference file picker (`#ref-input`, label "Choose Reference", `#ref-name` span). The reference row sits directly below the first row, visually grouped.
-- No matrix panel. Replace `#comparison-panel`'s inner structure with: `.comparison-header` (h2 "Accuracy Results" + run-count subhead), `#comparison-metrics` (two metric cards: Embedding Cosine vs Reference and ROUGE-1 F1 vs Reference), `.comparison-matrix-heading` ("Per-Run Scores"), `#score-table` (div that will hold a 2-column `sim-matrix` table).
-- Nav links in `signout-row`: link back to `test.html` ("Consistency Test") and sign-out button.
-- **Script placement — order matters for correctness:** In the `<head>` (after the stylesheet link): JSZip CDN script (`jszip@3.10.1` from CDN). At the bottom of `<body>` (before `</body>`): `config.js` then `gold.js`. JSZip must be in `<head>` so it is defined before `gold.js` calls `new JSZip()`. Loading JSZip at the bottom would cause a `ReferenceError` on any code path that runs synchronously on page load.
-- `max-width: 760px` on `#app` same as `test.html`.
-- The reference picker input should accept `.txt,.md` only (reference texts are expected to be plain text, not PDFs; the document file picker accepts the same types as `test.html`: `.txt,.md,.csv,.pdf`).
+2. Update `test_top_level_keys` (line 134):
+   ```python
+   assert set(body.keys()) == {"embedding_cosine", "bertscore_f1"}
+   ```
 
-### Step 8 — Create `frontend/gold.js`
+3. Rename `test_tfidf_not_in_response` to `test_legacy_metrics_not_in_response` and assert both absence guards:
+   ```python
+   assert "tfidf_cosine" not in body
+   assert "rouge1" not in body
+   ```
 
-**Auth block:** Copy verbatim from `test.js` — all PKCE helpers, token storage, `tryRefresh`, `ensureValidToken`, `handleSessionExpired`, `startSignIn`, `signOut`, `showAuth`, `showTest` (renamed `showGold`). Module-level variables: `idToken`, `isRunning`, `currentDocFile`, `currentRefFile`.
+4. Update `test_stats_keys_in_each_metric`: replace `body["rouge1"]` with `body["bertscore_f1"]`.
 
-**Enable/disable logic:** The "Run Test" button is enabled only when `currentDocFile !== null && currentRefFile !== null && n >= 1 && n <= 200 && !isRunning`.
+5. Update `test_scores_length_matches_texts_count`: replace `body["rouge1"]["scores"]` with `body["bertscore_f1"]["scores"]` and `body["rouge1"]["n"]` with `body["bertscore_f1"]["n"]`.
 
-**Job submission and polling:** Copy verbatim from `test.js` — `submitJob`, `pollUntilDone` are identical. These use `currentDocFile` as the file argument.
+6. Update `test_n_matches_texts_count`: same substitutions.
 
-**Reference reading:** Before calling the gold comparison endpoint, read the reference file client-side:
-```javascript
-async function readReferenceText(file) {
-  return file.text();  // returns Promise<string>
-}
-```
+7. Remove `test_rouge1_identical_texts_score_one` and `test_rouge1_disjoint_texts_score_zero` entirely — these test the deleted ROUGE algorithm. Replace with one new test:
+   ```python
+   def test_bertscore_f1_values_are_floats(self):
+       vec_map = self._simple_vec_map(_TEXTS[:2], _REF)
+       _, _, body = _call(_TEXTS[:2], _REF, vec_map)
+       for score in body["bertscore_f1"]["scores"]:
+           assert isinstance(score, float)
+   ```
 
-**Gold comparison call:**
-```javascript
-async function runGoldComparison(summaries, referenceText) {
-  if (!await ensureValidToken()) throw new Error('auth');
-  const res = await fetch(`${API_URL}/gold-compare`, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${idToken}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ texts: summaries, reference: referenceText }),
-  });
-  if (res.status === 401) throw new Error('auth');
-  if (!res.ok) throw new Error(`gold-compare HTTP ${res.status}`);
-  return res.json();
-}
-```
+8. Update `test_all_values_are_plain_python_types`: replace the `("embedding_cosine", "rouge1")` tuple with `("embedding_cosine", "bertscore_f1")`.
 
-**Results display — `showGoldPanel(comparison, succeededCount)`:**
-- Unhide `#comparison-panel`.
-- Set `#comparison-run-count` text.
-- Render two metric cards in `#comparison-metrics` using the same card HTML template as `test.js`'s `showComparisonPanel`, but with keys `embedding_cosine` (title "Titan Embedding Cosine vs Reference") and `rouge1` (title "ROUGE-1 F1 vs Reference"). The `metric-row` shows Mean / Min / Max / Std.
-- Render a 2-column table in `#score-table` with heading "Run" and "Score" (two columns, one per metric side by side, or two separate tables each with columns Run | Score). Use the `.sim-matrix` class for styling. Each row: `R01`, `R02`, … with the score value coloured by the `high`/`mid`/`low` threshold classes (high ≥ 0.8, mid ≥ 0.6, low < 0.6 — different thresholds from the pairwise comparator since scores are against a reference, not between similar runs).
+9. Update `test_mean_is_average_of_scores`: replace `"rouge1"` with `"bertscore_f1"`.
 
-**Zip builder — `buildAndDownloadZip`:** Same structure as `test.js` but:
-- Folder name: `gold_${timestamp}/`
-- Download filename: `gold_${timestamp}.zip`
-- `manifest.txt` header: "Gold Standard Test"
-- Include `reference.txt` (the raw reference text)
-- Include `gold_comparison.json` (the full comparison object)
-- Include `gold_comparison_report.txt` (a text report — see below)
-- Include `summary_NN.txt` per successful run and `usage_report.txt` (identical logic to `test.js`)
+10. Add a validation test for the BERTScore cap. The 400 fires before any AWS call, so no `boto3.client` mock is needed:
+    ```python
+    def test_above_bertscore_max_returns_400(self):
+        texts = [f"text {i}" for i in range(21)]
+        resp = lambda_handler(_event(texts, _REF), None)
+        assert resp["statusCode"] == 400
+    ```
 
-**Report builder — `buildGoldReport(docName, timestamp, succeededCount, comparison, referenceText)`:**
-```
-Gold Standard Accuracy Report
-==============================
-Document : <docName>
-Reference: <first 80 chars of referenceText>...
-Timestamp: <timestamp>
-Runs     : <succeededCount>
+### Step 8 — Verify Terraform formatting
 
-── Titan Embedding Cosine vs Reference ──
-  Mean   : X.XXXX    Min : X.XXXX    Max : X.XXXX
-  Std Dev: X.XXXX
-
-── ROUGE-1 F1 vs Reference ──
-  Mean   : X.XXXX    Min : X.XXXX    Max : X.XXXX
-  Std Dev: X.XXXX
-
-── Per-Run Scores ──
-Run   Emb Cosine   ROUGE-1 F1
----   ----------   ----------
-R01   X.XXXX       X.XXXX
-R02   X.XXXX       X.XXXX
-...
-```
-
-**Main runner — `runGoldTest()`:** Identical flow to `test.js`'s `runConsistencyTest()` with these changes:
-1. Read `currentRefFile` text before submitting jobs (fail early if the file can't be read).
-2. Minimum succeeded threshold for comparison: `succeeded >= 1` (not 2, since we only need one run to compare against the reference; a single run vs a reference is meaningful).
-3. Call `runGoldComparison(summaries, referenceText)` instead of `runComparison`.
-4. Call `showGoldPanel` and `buildAndDownloadZip` with the gold-specific signatures.
-
-**Init and event listeners:** Same as `test.js`. Add a second file-input change listener for `#ref-input` that sets `currentRefFile` and updates `#ref-name`.
-
-### Step 9 — Update navigation links
-
-**`frontend/test.html`** — The current `signout-row` contains only the sign-out button (no existing nav links). Add a link to `gold.html` before the sign-out button. The result after the edit must be exactly:
-```html
-<div class="signout-row">
-  <a href="gold.html" class="btn-link">Gold Standard Test</a>
-  <button id="signout-btn" class="btn-link">Sign Out</button>
-</div>
-```
-
-**`frontend/index.html`** — In the `signout-row` div, add a link to `gold.html` alongside the existing "Consistency Test" link:
-```html
-<div class="signout-row">
-  <a href="test.html" class="btn-link">Consistency Test</a>
-  <a href="gold.html" class="btn-link">Gold Standard Test</a>
-  <button id="signout-btn" class="btn-link">Sign Out</button>
-</div>
-```
+Run `terraform -chdir=infra fmt -recursive` to ensure all `.tf` changes pass CI format checks before committing.
 
 ---
 
 ## Risks and Blockers
 
-**1. ThreadPoolExecutor mock complexity in tests**
+### Risk 1 — API Gateway 29-second hard timeout (HIGH)
+BERTScore on CPU for scibert at `memory_size = 5120` is estimated at ~5–25 seconds for small N (AWS blog data for distilbert at 5 GB memory). scibert is larger (~440 MB vs 268 MB for distilbert), so inference will be slower. For N=20 medical summaries at ~300–500 words each, inference time is uncertain.
 
-The existing `test_comparator.py` mocks boto3 with a simple `side_effect` list that works because calls are sequential. The gold comparator uses `ThreadPoolExecutor`, so the mock must be keyed by call content, not call order. The test file must implement the named `_bedrock_mock` function described in Step 2 — using a dict lookup on `inputText` via `*args, **kwargs` with positional fallback. A lambda-based side_effect that relies on call ordering is fragile and must not be used.
+**Mitigation:** Set `BERTSCORE_MAX_TEXTS = 20` conservatively. After deployment, test empirically with representative medical summaries. If 20 times out, reduce to 10. If 10 is consistently fast, consider raising to 25. The cap value is a module-level constant in `handler.py` — easy to tune without rebuilding the image (it requires a new image push, but is a one-line change). Document the cap and the reason in the handler docstring and the 400 error message.
 
-**2. API Gateway 30-second hard timeout**
+### Risk 2 — First-deploy bootstrapping order (MEDIUM)
+Terraform's `aws_lambda_function.gold_comparator` with `package_type = "Image"` requires a valid private ECR image URI at apply time. Using a public ECR URI as a placeholder causes `CreateFunction` to fail with `InvalidParameterValueException`. On first deploy, the ECR repo does not yet exist and no image has been pushed.
 
-The HTTP API timeout cannot be raised. For N=200 texts with very long inputs (approaching 8K tokens each), parallel Titan calls might take longer than 30 seconds if Bedrock is under load. The plan mitigates this with `ThreadPoolExecutor` parallelism, which bounds wall-clock time to approximately `max(single_call_latency)` rather than `N * avg_call_latency`. For typical medical summary text (under 500 tokens), this is well within limits. No further mitigation is recommended at this stage; document the N=200 edge case as a known constraint.
+**Mitigation:** Use the following corrected first-deploy bootstrapping sequence:
+1. `terraform apply -target=aws_ecr_repository.gold_comparator -target=aws_ecr_lifecycle_policy.gold_comparator` — creates only the private ECR repo.
+2. `./scripts/build_gold_comparator.sh` — builds and pushes the real image to the private repo.
+3. `terraform apply` — creates the Lambda function (referencing the now-existing private image URI) and all remaining resources.
 
-**3. Reference file encoding**
+For CI/CD (subsequent deploys): `terraform apply` runs first (updates all infrastructure), then `./scripts/build_gold_comparator.sh` builds and pushes the updated image and updates the Lambda. The `lifecycle { ignore_changes = [image_uri] }` block ensures Terraform does not overwrite the image URI managed by the deploy script.
 
-`file.text()` in the browser uses UTF-8 by default. If a user uploads a file with a different encoding (e.g., Windows-1252), the resulting string may contain garbled characters. This is acceptable for a first version; add a note in the UI if needed.
+Document this bootstrapping sequence clearly in both `build_gold_comparator.sh` and the deploy.yml step comment.
 
-**4. CORS — no change needed**
+### Risk 3 — Model weight download during Docker build in restricted environments (MEDIUM)
+The Dockerfile `RUN` step that pre-bakes model weights downloads ~440 MB from HuggingFace during `docker build`. This requires outbound HTTPS internet access from the build machine.
 
-The existing CORS config on `aws_apigatewayv2_api.main` already allows `POST` from the CloudFront origin. `POST /gold-compare` is covered automatically.
+**Mitigation:** GitHub Actions `ubuntu-latest` has unrestricted internet access. Local developer builds need internet access for the first build (Docker layer cache handles subsequent builds). Document this requirement in `build_gold_comparator.sh` comments. No workaround is needed for the current CI/CD environment.
 
-**5. Cognito redirect — no change needed**
+### Risk 4 — BERTScore F1 scale confuses users (LOW)
+Scores in [0.84, 0.97] look "low" to users expecting [0, 1]. The existing `_scoreCellClass` function will colour all BERTScore values as "high" (>= 0.8 threshold), which is visually fine but the absolute numbers may alarm users unfamiliar with BERTScore.
 
-`gold.js` uses `REDIRECT_URI = window.location.origin + '/'` (identical to `test.js`), so no new callback URL registration is required in Cognito.
+**Mitigation:** Add the scale context to the metric card title in `gold.js` (Step 6, item 1): `'BERTScore F1 vs Reference (typical range ~0.84–0.97)'`. Add the same note to `buildGoldReport()` section header. This is purely a display/documentation concern.
 
-**6. Deploy script — no change needed**
+### Risk 5 — Provisioned Concurrency cost (LOW)
+1 provisioned concurrency unit for a 5120 MB Lambda incurs approximately $110–130/month in us-east-1, charged continuously whether or not the function is invoked.
 
-`scripts/deploy_frontend.sh` syncs the entire `frontend/` directory to S3. `gold.html` and `gold.js` will be picked up automatically. The existing `/*` CloudFront invalidation pattern covers the new files.
+**Mitigation:** Accept this cost as the price of eliminating 25-second cold starts for a medical evaluation tool. If cost becomes a concern, consider adding a Terraform variable (e.g., `var.gold_comparator_provisioned_concurrency` defaulting to `1`, settable to `0`) to make provisioned concurrency optional. At `0`, cold starts would occur but the Lambda would still function correctly.
 
-**7. Lambda cold-start for gold comparator**
+### Risk 6 — torch.no_grad() and F1.tolist() contract (LOW)
+The handler calls `F1.tolist()` on the tensor returned by `_scorer.score()`. If `bert-score` ever returns a non-tensor (e.g., a plain list on some code path), this will fail silently or raise `AttributeError`.
 
-The gold comparator is a separate Lambda with its own cold-start. For infrequently-used evaluation pages, this is expected. No provisioned concurrency is needed.
-
-**8. Terraform fmt requirement**
-
-Per CLAUDE.md, `terraform -chdir=infra fmt -recursive` must be run before committing. The implementation agent must run this after editing all `.tf` files.
-
-**9. JSZip script placement (functional bug risk)**
-
-JSZip must be loaded in `<head>`, not at the bottom of `<body>`. Any reordering that places the JSZip CDN script after `gold.js` will cause `ReferenceError: JSZip is not defined` at runtime on any code path that calls `new JSZip()`. See Step 7 for the required placement.
+**Mitigation:** Wrap the conversion defensively: `bertscore_scores = [float(f) for f in (F1.tolist() if hasattr(F1, 'tolist') else F1)]`. This is a minor defensive pattern — the `bert-score` library's documented contract is to return torch.Tensor, so this is purely belt-and-suspenders.
 
 ---
 
 ## Testing Strategy
 
-### Unit tests (no AWS credentials needed)
-```bash
-pip install pytest boto3
-pytest tests/test_gold_comparator.py -v
-```
-All tests mock boto3; no real Bedrock calls are made. Verify all test classes pass: `TestValidation`, `TestResponseStructure`, `TestMetricCorrectness`. Specifically verify `test_tfidf_not_in_response` passes (confirming TF-IDF is absent from the response).
+### Unit tests (no AWS, no Docker, no model)
+1. Run `pytest tests/test_gold_comparator.py` — all tests must pass with the mocked BERTScorer. This validates handler logic, response shape, key names, validation rules, and the new BERTScore cap validation.
+
+### Docker build smoke test (Docker required, internet required on first run)
+2. Build the Docker image locally:
+   ```bash
+   docker buildx build --platform linux/arm64 --provenance=false \
+     -t gold-comparator:test /workspace/active_repo/lambda/gold_comparator/
+   ```
+   The build must complete without errors. Success confirms: scibert model weights downloaded and baked in, handler.py importable with bert_score, BERTScorer instantiates at module level without error.
+
+### Container invocation test (Docker required)
+3. Run the built container with the Lambda Runtime Interface Emulator (RIE):
+   ```bash
+   docker run --rm -p 9000:8080 gold-comparator:test
+   # In a second terminal:
+   curl -XPOST "http://localhost:9000/2015-03-31/functions/function/invocations" \
+     -H 'Content-Type: application/json' \
+     -d '{"body":"{\"texts\":[\"patient blood glucose elevated hemoglobin\",\"blood glucose high in this patient\"],\"reference\":\"patient has elevated blood glucose and hemoglobin\"}"}'
+   ```
+   Expected response: JSON with `embedding_cosine` and `bertscore_f1` keys, F1 scores in [0.82, 0.98] range, response time under 29 seconds (model already loaded at module level, no cold start).
+
+   Note: Bedrock calls will fail in local testing (no AWS credentials in the container). Mock the embedding step by either: (a) running with AWS credentials via `-e AWS_ACCESS_KEY_ID=...` env vars, or (b) testing BERTScore independently in the container via `docker exec` and a Python REPL.
 
 ### Terraform validation
-```bash
-terraform -chdir=infra fmt -check -recursive
-terraform -chdir=infra validate
-terraform -chdir=infra plan
-```
-The plan output should show exactly these new resources:
-- `aws_cloudwatch_log_group.lambda["gold-comparator"]`
-- `aws_iam_role.gold_comparator`
-- `aws_iam_role_policy.gold_comparator_logs`
-- `aws_iam_role_policy.gold_comparator_bedrock`
-- `aws_iam_role_policy.gold_comparator_xray`
-- `data.archive_file.gold_comparator`
-- `aws_lambda_function.gold_comparator`
-- `aws_apigatewayv2_integration.gold_comparator`
-- `aws_apigatewayv2_route.gold_compare`
-- `aws_lambda_permission.apigw_gold_comparator`
+4. `terraform -chdir=infra fmt -check -recursive` — must pass (run `fmt -recursive` first to fix any issues)
+5. `terraform -chdir=infra validate` — must pass (validates ECR repo and Lambda image resource)
 
-No existing resources should be modified or destroyed.
-
-### Existing test suite regression
-```bash
-pytest tests/ -v
-```
-All pre-existing tests must continue to pass. The new Lambda is independent and does not touch any existing Lambda code.
-
-### Frontend smoke test (post-deploy, manual)
-1. Navigate to `gold.html` directly — verify the auth section is shown when not signed in, and a "Gold Standard Test" nav link appears from `test.html` and `index.html`.
-2. Sign in via the Cognito-hosted UI — verify redirect returns to `gold.html` correctly via the `auth_return` localStorage key.
-3. Choose a document file and a reference text file — verify the "Run Test" button enables only after both files are selected.
-4. Run with `n=2` — verify the progress grid shows two tiles, both reach "done" state.
-5. Verify the zip downloads with the correct folder structure: `gold_TIMESTAMP/summary_01.txt`, `summary_02.txt`, `reference.txt`, `manifest.txt`, `usage_report.txt`, `gold_comparison.json`, `gold_comparison_report.txt`.
-6. Verify the "Accuracy Results" panel shows: two metric cards (Titan Embedding Cosine vs Reference and ROUGE-1 F1 vs Reference), each with Mean/Min/Max/Std values; and a per-run score table.
-7. Verify that navigating to `test.html` shows a "Gold Standard Test" link and vice versa.
-8. Open browser DevTools Network tab and confirm the `POST /gold-compare` response body contains exactly the keys `embedding_cosine` and `rouge1` — and no `tfidf_cosine` key.
+### End-to-end (deployed infrastructure)
+6. Execute the first-deploy bootstrapping sequence from Risk 2 mitigation. Confirm all three steps complete without error.
+7. Open `gold.html` in the browser. Upload a test document and a reference file. Run 2–3 iterations.
+8. Verify the UI shows `BERTScore F1 vs Reference (typical range ~0.84–0.97)` metric card (not "ROUGE-1 F1").
+9. Verify the per-run score table shows a "BERTScore F1" column.
+10. Download the zip. Open `gold_comparison_report.txt` and confirm it contains `BERTScore F1 vs Reference` headers. Open `gold_comparison.json` and confirm it has `bertscore_f1` key and no `rouge1` key.
+11. Confirm F1 values are in a reasonable range (roughly 0.84–0.97 for similar medical texts).
+12. Test the cap: set run count to 21 and click Run. The `POST /gold-compare` call should return HTTP 400 with a message mentioning the BERTScore limit. The UI should handle this gracefully (the existing error path in `runGoldTest` catches non-200 from `runGoldComparison`).
+13. On a subsequent deploy, trigger the `Deploy` workflow. Confirm all steps complete, specifically the `Build and push gold_comparator image` step and that Provisioned Concurrency is applied to the new version.
 
 ---
 
-**IMPORTANT — handoff to main agent:** This plan is complete and written to `/workspace/active_repo/claude-context-plan.md`. Before any implementation begins, the **Plan Reviewer agent MUST be run next** to audit this plan for correctness, completeness, and risks. No code should be written until the Reviewer has issued its verdict.
+**IMPORTANT — handoff to main agent:** This plan is written and complete. The Plan Reviewer agent MUST be run next before any implementation begins. No code should be written until the Reviewer has issued its verdict.

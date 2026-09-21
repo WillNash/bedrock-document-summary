@@ -62,3 +62,13 @@ output "pipeline_starter_dlq_url" {
   description = "SQS URL for the pipeline_starter dead-letter queue"
   value       = aws_sqs_queue.pipeline_starter_dlq.url
 }
+
+output "gold_comparator_ecr_repository_name" {
+  description = "ECR repository name for the gold_comparator container image"
+  value       = aws_ecr_repository.gold_comparator.name
+}
+
+output "gold_comparator_function_name" {
+  description = "Lambda function name for gold_comparator — used by build_gold_comparator.sh"
+  value       = aws_lambda_function.gold_comparator.function_name
+}

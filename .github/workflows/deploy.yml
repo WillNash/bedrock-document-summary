@@ -51,5 +51,8 @@ jobs:
       - name: Terraform Apply
         run: terraform -chdir=infra apply -auto-approve -input=false
 
+      - name: Build and push gold_comparator image
+        run: ./scripts/build_gold_comparator.sh
+
       - name: Deploy frontend
         run: ./scripts/deploy_frontend.sh

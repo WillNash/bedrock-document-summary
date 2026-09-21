@@ -1,367 +1,303 @@
-# Claude Context Explorer — Gold Standard Evaluator Page
+# Claude Context Explorer — BERTScore in Gold Comparator
 
-Task: Document everything needed to build Pathway 2 (Gold Standard) as a new frontend page.
-
----
-
-## 1. Existing Test Page — `/workspace/active_repo/frontend/test.html` + `/workspace/active_repo/frontend/test.js`
-
-### HTML structure (test.html)
-- Single `.card` container inside `#app` (max-width 760px — wider than the main app's 640px).
-- Three top-level sections toggled via `.hidden`:
-  - `#auth-section` — sign-in button shown when not authenticated.
-  - `#test-section` — the working UI (file picker, run count spinner, run button, progress grid, comparison panel, sign-out).
-  - Inside `#test-section`:
-    - `.config-row` — holds `.file-area` (label + hidden file input + `.file-name` span), `.run-config` (label + number input), and `.btn-primary` run button.
-    - `#progress-panel.hidden` — `#progress-header` (status text), `#run-grid` (tile grid), `#error-log`.
-    - `#comparison-panel.hidden` — `.comparison-header` (h2 + `#comparison-run-count`), `#comparison-metrics` (metric cards), `.comparison-matrix-heading`, `#similarity-matrix`.
-    - `.signout-row` — sign-out link button.
-- External scripts: `config.js` (generated at deploy time) then `test.js`.
-- JSZip loaded from CDN (`jszip@3.10.1`).
-
-### Auth flow (test.js)
-- Reads `window.APP_CONFIG` from `config.js` for `cognitoHostedUiDomain`, `cognitoClientId`, `apiUrl`.
-- `REDIRECT_URI` is always `window.location.origin + '/'` (the root path). This means the Cognito callback doesn't need a `/gold-standard.html` entry — it shares the existing redirect.
-- Tokens stored in `localStorage` under keys `id_token`, `access_token`, `refresh_token`.
-- `init()` on load: reads stored `id_token`, falls back to `tryRefresh()`, or shows the auth section.
-- `startSignIn()` stores `auth_return` in localStorage so `app.js` can redirect back after the OAuth callback.
-- `ensureValidToken()` called before every API request; triggers refresh or `handleSessionExpired()`.
-
-### Job submission / polling flow (test.js)
-- `submitJob(file, runNum)`:
-  1. `POST /presign` with `{filename}`, Bearer token → `{job_id, presign_url, presign_fields}`.
-  2. Build `FormData` with `presign_fields` entries then append `file` last, POST to `presign_url`.
-  3. Returns `job_id`; tile goes to `pending` state.
-- `pollUntilDone(job_id, runNum)`:
-  1. Loop up to 120 ticks (5 s each = 10 min max).
-  2. `GET /jobs/{job_id}` — checks `data.status`.
-  3. On `COMPLETED`: `GET /summaries/{job_id}` → `{summary, usage}`.
-  4. On `FAILED`: throws with `data.error_message`.
-- Multiple jobs are submitted with 200 ms stagger (to protect DynamoDB quota) but polled in parallel via `Promise.all`.
-
-### Comparison call (test.js)
-- `runComparison(summaries)`:
-  - `POST /compare` with `{texts: [string, ...]}`, Bearer token.
-  - Returns comparison object (see comparator response shape below).
-- Only called when `succeeded >= 2`.
-
-### Zip builder (test.js)
-- Uses JSZip to build a folder `consistency_{timestamp}/` containing:
-  - `summary_NN.txt` for each successful run.
-  - `manifest.txt`.
-  - `usage_report.txt` (tabular token usage per stage per run).
-  - `comparison.json` and `comparison_report.txt` if comparison succeeded.
-- Triggers browser download via a temporary `<a>` element.
+**Task:** Find a way to use BERTScore in the cloud for the gold standard evaluator (`POST /gold-compare`), replacing or supplementing ROUGE-1 F1.
 
 ---
 
-## 2. Comparator Lambda — `/workspace/active_repo/lambda/comparator/handler.py`
+## 1. Files Examined
 
-### Request shape
+- `/workspace/active_repo/lambda/gold_comparator/handler.py`
+- `/workspace/active_repo/infra/lambda.tf`
+- `/workspace/active_repo/infra/iam.tf`
+- `/workspace/active_repo/infra/api_gateway.tf`
+- `/workspace/active_repo/infra/locals.tf`
+- `/workspace/active_repo/infra/variables.tf`
+- `/workspace/active_repo/infra/step_functions.tf`
+- `/workspace/active_repo/infra/bedrock.tf`
+- `/workspace/active_repo/lambda/requirements.txt`
+- `/workspace/active_repo/tools/requirements.txt`
+- `/workspace/active_repo/tools/consistency_evaluator.py`
+- `/workspace/active_repo/tools/consistency_evaluator_cloud.py`
+- `/workspace/active_repo/scripts/build_lambdas.sh`
+- `/workspace/active_repo/.github/workflows/ci.yml`
+- `/workspace/active_repo/.github/workflows/deploy.yml`
+- `/workspace/active_repo/frontend/gold.html`
+- `/workspace/active_repo/frontend/gold.js`
+- `/workspace/active_repo/tests/test_gold_comparator.py`
+
+---
+
+## 2. Current gold_comparator Handler — Full Structure
+
+**File:** `/workspace/active_repo/lambda/gold_comparator/handler.py`
+
+### Request contract
 ```
-POST /compare
+POST /gold-compare
 Authorization: Bearer <id_token>
 Content-Type: application/json
 
-{
-  "texts": ["string", "string", ...]   // 2–200 entries, all strings
-}
+{"texts": ["summary1", "summary2", ...], "reference": "gold text"}
+texts: 2–200 strings
 ```
 
-### Response shape (200 OK)
+### Response contract
 ```json
 {
-  "embeddings": [[...1024 floats...], ...],
-  "embedding_cosine": {
-    "matrix": [[float, ...], ...],
-    "n_runs": int,
-    "n_pairs": int,
-    "mean": float,
-    "min": float,
-    "max": float,
-    "std": float,
-    "variance": float,
-    "cv": float | null
-  },
-  "tfidf_cosine": {
-    "matrix": [[float, ...], ...],
-    "n_runs": int,
-    "n_pairs": int,
-    "mean": float,
-    "min": float,
-    "max": float,
-    "std": float,
-    "variance": float,
-    "cv": float | null
-  }
+  "embedding_cosine": {"scores": [...], "mean": ..., "min": ..., "max": ..., "std": ..., "n": int},
+  "rouge1":           {"scores": [...], "mean": ..., "min": ..., "max": ..., "std": ..., "n": int}
 }
 ```
 
-### Implementation details
-- Pure stdlib + boto3 — no numpy, no sklearn. All math is hand-coded Python.
-- Calls `bedrock-runtime.invoke_model()` for each text using `amazon.titan-embed-text-v2:0` with `{"inputText": text, "dimensions": 1024, "normalize": true}`. Titan returns pre-normalised vectors so cosine similarity = dot product.
-- Embedding matrix: N×N, computed via `itertools.combinations`.
-- TF-IDF: pure Python — tokenizes with `re.findall(r'\b[a-z]{2,}\b')`, computes IDF, normalises vectors, then dot products.
-- `_variability_stats(n_runs, scores)` takes the upper-triangle list (not the full matrix), returns the stats dict.
-- Error responses: `{"error": "message"}` with appropriate 4xx statusCode.
+### How it works
+1. Validates `texts` (list, 2–200 strings) and `reference` (non-empty string).
+2. Uses `ThreadPoolExecutor` to embed all `texts` in parallel via Bedrock `amazon.titan-embed-text-v2:0`.
+3. Embeds the `reference` synchronously after the thread pool completes.
+4. Computes cosine similarity of each text embedding vs the reference embedding (dot product — vectors are normalized by Bedrock).
+5. Computes ROUGE-1 F1 for each text vs the reference using stdlib only (no numpy, no scikit-learn).
+6. Returns both metric blocks with the same stats shape: `{scores, mean, min, max, std, n}`.
 
-### What the comparator does NOT do
-- Does NOT accept a reference text. Every text in the input list is treated symmetrically — pairwise N×N.
-- Does NOT return individual per-text scores against a reference.
-
----
-
-## 3. API Gateway — `/workspace/active_repo/infra/api_gateway.tf`
-
-### Structure
-- `aws_apigatewayv2_api.main` — HTTP API, CORS configured for CloudFront origin only. Allow-methods: GET, POST, OPTIONS.
-- `aws_apigatewayv2_authorizer.cognito` — JWT authorizer using Cognito user pool.
-- `aws_apigatewayv2_stage.default` — `$default` stage, auto_deploy=true, JSON access logging.
-- All routes use `authorization_type = "JWT"` with `authorizer_id = aws_apigatewayv2_authorizer.cognito.id`.
-
-### Existing routes
-| Route key | Integration | Lambda |
-|---|---|---|
-| `POST /compare` | comparator | `aws_lambda_function.comparator` |
-| `POST /presign` | api_presign | `aws_lambda_function.api_presign` |
-| `GET /jobs/{jobId}` | api_status | `aws_lambda_function.api_status` |
-| `GET /summaries/{jobId}` | api_summary | `aws_lambda_function.api_summary` |
-
-### Pattern for a new route (e.g. `POST /gold-compare`)
-1. `aws_apigatewayv2_integration.gold_comparator` — `integration_type = "AWS_PROXY"`, `payload_format_version = "2.0"`, `integration_uri = aws_lambda_function.gold_comparator.invoke_arn`.
-2. `aws_apigatewayv2_route.gold_compare` — `route_key = "POST /gold-compare"`, JWT auth, `target = "integrations/${...integration.id}"`.
-3. `aws_lambda_permission.apigw_gold_comparator` — `action = "lambda:InvokeFunction"`, `principal = "apigateway.amazonaws.com"`, `source_arn = "${aws_apigatewayv2_api.main.execution_arn}/*/*"`.
+### Key constraint
+The handler is **stdlib-only** beyond boto3. All non-stdlib logic is pure Python (cosine via `sum(x*y ...)`, ROUGE via `re` + `Counter`). The Lambda layer (`layer.zip`) contains only `jinja2` and `jsonschema` — the gold_comparator Lambda does **not** use that layer at all (no `layers = [...]` in its `aws_lambda_function` block in lambda.tf).
 
 ---
 
-## 4. IAM Pattern — `/workspace/active_repo/infra/iam.tf`
+## 3. infra/lambda.tf — Packaging Details
 
-### Per-function role anatomy (using comparator as the cleanest example)
-```hcl
-resource "aws_iam_role" "comparator" {
-  name               = "${local.name_prefix}-comparator-role"
-  assume_role_policy = data.aws_iam_policy_document.lambda_trust.json
-  tags               = local.common_tags
-}
+**File:** `/workspace/active_repo/infra/lambda.tf`
 
-resource "aws_iam_role_policy" "comparator_logs" {
-  name = "cloudwatch-logs"
-  role = aws_iam_role.comparator.id
-  policy = jsonencode({...logs to /aws/lambda/${local.name_prefix}-comparator:*...})
-}
+- `gold_comparator` is packaged as a plain **zip** via `archive_file.gold_comparator` (`source_dir = ../lambda/gold_comparator`).
+- It uses `runtime = "python3.12"`, `architectures = ["arm64"]`.
+- It does **not** use a Lambda layer — no `layers` attribute on this function.
+- It has `timeout = 30` and `memory_size = 256`.
+- No `package_type = "Image"` — no container image deployment pattern is used anywhere in the codebase. There is no ECR, no ECS, no Fargate, no SageMaker, no `RunTask` call anywhere in the infra. This is greenfield if the container image route is chosen.
+- The only Lambda layer is `aws_lambda_layer_version.deps` (jinja2 + jsonschema), used only by `validator` and `renderer`. Layer size limit is 50 MB zipped / 250 MB unzipped — definitively too small for bert-score + torch.
+- The `scripts/build_lambdas.sh` script uses `pip install --platform manylinux2014_aarch64 --only-binary=:all:` which would be the correct approach for building arm64-compatible wheels for a layer.
 
-resource "aws_iam_role_policy" "comparator_bedrock" {
-  name = "bedrock-invoke"
-  role = aws_iam_role.comparator.id
-  policy = jsonencode({ Statement = [{ Effect="Allow", Action=["bedrock:InvokeModel"], Resource=["*"] }] })
-}
+---
 
-resource "aws_iam_role_policy" "comparator_xray" {
-  name = "xray"
-  role = aws_iam_role.comparator.id
-  policy = jsonencode({ Statement = [{ Effect="Allow", Action=local.xray_actions, Resource="*" }] })
-}
+## 4. infra/iam.tf — gold_comparator IAM Role
+
+**File:** `/workspace/active_repo/infra/iam.tf` (lines 372–418)
+
+The `gold_comparator` role has exactly three policies:
+1. **`gold_comparator_logs`** — CloudWatch Logs scoped to `/aws/lambda/{prefix}-gold-comparator:*`.
+2. **`gold_comparator_bedrock`** — `bedrock:InvokeModel` on `Resource: ["*"]` (unrestricted model access). This already covers any Bedrock model.
+3. **`gold_comparator_xray`** — X-Ray tracing.
+
+**There are no `ecs:RunTask`, `sagemaker:InvokeEndpoint`, or `lambda:InvokeFunction` permissions on this role.** Any approach that calls a second Lambda or an ECS task would require new IAM policies on this role.
+
+---
+
+## 5. API Gateway Route for gold-compare
+
+**File:** `/workspace/active_repo/infra/api_gateway.tf`
+
+- `POST /gold-compare` is wired as `AWS_PROXY` (`payload_format_version = "2.0"`) directly to `gold_comparator` Lambda.
+- It is JWT-authorized via Cognito (same authorizer as all other routes).
+- This is a **synchronous** Lambda invocation — API Gateway HTTP API has a hard 29-second response timeout. No async/SQS/polling pattern exists anywhere in the codebase for the gold compare path.
+
+---
+
+## 6. No Existing ECS/Fargate/Container Infrastructure
+
+A full-text search across all `.tf`, `.sh`, `.yml`, and `.py` files found **zero references** to ECS, Fargate, ECR, SageMaker, container images, or `package_type = "Image"`. The entire architecture is pure Lambda + Step Functions + API Gateway + S3 + DynamoDB. Any heavier-compute approach is greenfield.
+
+---
+
+## 7. Requirements Files
+
+**`/workspace/active_repo/lambda/requirements.txt`** (the shared Lambda layer):
+```
+jinja2>=3.1.0
+jsonschema>=4.21.0
 ```
 
-The gold standard comparator needs identical policies (logs, bedrock invoke for Titan, xray). No DynamoDB, no S3, no KMS needed — same as the existing comparator.
+**`/workspace/active_repo/tools/requirements.txt`** (local dev tools — NOT deployed):
+```
+python-hcl2==8.1.4
+sentence-transformers>=6.1.0
+bert-score==0.3.13
+scikit-learn>=1.4.0
+rouge-score>=0.1.2
+numpy>=1.26.0
+torch>=2.2.0
+jinja2>=3.1.0
+jsonschema>=4.21.0
+```
+
+`bert-score==0.3.13` with `torch` is already used in local tools and in CI tests. The CI workflow installs CPU-only torch via `--index-url https://download.pytorch.org/whl/cpu` to avoid the 2–3 GB CUDA wheel.
 
 ---
 
-## 5. Lambda Function Pattern — `/workspace/active_repo/infra/lambda.tf`
+## 8. Existing BERTScore Usage Pattern (tools/)
 
-### archive_file pattern (simple source_dir, like comparator)
-```hcl
-data "archive_file" "gold_comparator" {
-  type        = "zip"
-  source_dir  = "${path.module}/../lambda/gold_comparator"
-  output_path = "${path.module}/lambda_packages/gold_comparator.zip"
-}
+**File:** `/workspace/active_repo/tools/consistency_evaluator.py`
+
+The local evaluator uses `bert_score.BERTScorer` with `model_type="microsoft/deberta-large-mnli"` (~900 MB download). CI tests use `distilbert-base-uncased` as a smaller substitute. The call pattern for a one-to-one score (each hypothesis vs one reference):
+
+```python
+from bert_score import BERTScorer
+scorer = BERTScorer(model_type=BERTSCORE_MODEL, lang="en")
+_, _, F1 = scorer.score([hypothesis], [reference])
+f1_value = F1.item()  # torch.Tensor -> Python scalar
 ```
 
-### aws_lambda_function pattern (modelled on comparator)
-```hcl
-resource "aws_lambda_function" "gold_comparator" {
-  function_name    = "${local.name_prefix}-gold-comparator"
-  filename         = data.archive_file.gold_comparator.output_path
-  source_code_hash = data.archive_file.gold_comparator.output_base64sha256
-  handler          = "handler.lambda_handler"
-  runtime          = "python3.12"
-  architectures    = ["arm64"]
-  role             = aws_iam_role.gold_comparator.arn
-  timeout          = 30
-  memory_size      = 256
-
-  tracing_config { mode = "Active" }
-
-  logging_config {
-    log_format = "JSON"
-    log_group  = aws_cloudwatch_log_group.lambda["gold-comparator"].name
-  }
-
-  tags       = local.common_tags
-  depends_on = [aws_cloudwatch_log_group.lambda]
-}
-```
-
-The existing comparator has no environment variables. The gold comparator similarly needs none.
-
----
-
-## 6. CloudWatch Log Groups — `/workspace/active_repo/infra/cloudwatch.tf`
-
-### Current `lambda_function_names` list
-```hcl
-locals {
-  lambda_function_names = [
-    "api-presign", "api-status", "api-summary",
-    "pipeline-starter",
-    "classifier", "extractor", "validator", "renderer",
-    "fail-handler",
-    "comparator",
-  ]
-}
-```
-
-The `aws_cloudwatch_log_group.lambda` resource is a `for_each` over this set. Each entry creates `/aws/lambda/${local.name_prefix}-${each.key}`.
-
-**To add the gold comparator:** append `"gold-comparator"` to this list. That single change creates the log group referenced by the new Lambda's `logging_config`.
-
----
-
-## 7. Frontend CSS — `/workspace/active_repo/frontend/style.css`
-
-### Classes the new page can reuse directly (no additions needed)
-| Class | Usage |
-|---|---|
-| `.card` | White rounded card with box shadow |
-| `.btn-primary` | Blue filled button (sign in, run) |
-| `.btn-secondary` | Grey button (used as file picker label) |
-| `.btn-link` | Subtle underlined text button (sign out) |
-| `.hidden` | `display: none !important` toggle |
-| `.config-row` | Flex row: file area + controls + action button |
-| `.file-area` | File picker label + file name span |
-| `.file-name` | Truncating filename display |
-| `.run-config` | Label + number input pair |
-| `.run-config input[type="number"]` | Styled number spinner |
-| `.progress-header` | Status/progress text above tile grid |
-| `.run-grid` | Auto-fill tile grid |
-| `.run-tile` + state classes (`.queued`, `.uploading`, `.pending`, `.running`, `.processing`, `.done`, `.failed`) | Coloured status tiles |
-| `.run-num`, `.run-status` | Tile label text |
-| `#error-log`, `.run-error-entry` | Red error log panel |
-| `.comparison-header` | Flex row with border-top separator |
-| `.comparison-subhead` | Grey subtitle next to h2 |
-| `.comparison-metrics` | 2-column grid of metric cards |
-| `.metric-card` | Individual metric card (grey bg, border) |
-| `.metric-card-title` | Uppercase label at top of card |
-| `.metric-row` | 4-column grid: Mean, Min, Max, Std |
-| `.metric-stat`, `.metric-stat-label`, `.metric-stat-value` | Stat cell inside metric-row |
-| `.comparison-matrix-heading` | Label above matrix table |
-| `.matrix-scroll` | Horizontally scrollable matrix wrapper |
-| `.sim-matrix`, `.sim-matrix th`, `.sim-matrix td` | Matrix table |
-| `.sim-matrix td.diag`, `.high`, `.mid`, `.low` | Coloured matrix cells |
-| `.signout-row` | Right-aligned bottom row |
-| `.error-text` | Red inline error block |
-
-### What the new page needs that isn't in the stylesheet
-- A "reference upload" area distinct from the "runs" upload area. Could be an additional `.file-area` row with a different label, or a second `.config-row`. No new CSS class needed if the same structure is reused.
-- Possibly a "reference label" on the comparison panel to distinguish the gold standard reference from the N summaries. Could be handled with a new section heading using existing `h2` + `.comparison-subhead` pattern.
-- The matrix on the gold standard page will be N×1 (or displayed as a bar/list of scores, not a square N×N matrix). The existing `.sim-matrix` table can still be used if rendered as a single-column table.
-
----
-
-## 8. Pathway 2 — Gold Standard (from `consistency-evaluator-plan.md`)
-
-> **Pathway 2 — Gold standard** (future): N outputs + 1 reference → N individual similarity scores → mean/min/std against the reference. Answers: "how accurate is the pipeline?"
-
-### Key constraints from the plan
-- Pathway 2 must be **completely separate** from Pathway 1. No shared function signatures with optional `reference` parameter.
-- The only shared infrastructure is `_collect_runs()` (N-run Bedrock collection).
-- The CLI tool for Pathway 2 should be named `gold_standard_evaluator.py` (separate from `consistency_evaluator.py`).
-- At the API/Lambda level: the new Lambda must be a separate function (`gold_comparator` or similar), not a modified comparator. The existing `/compare` endpoint and `comparator` Lambda must not be changed.
-
-### What Pathway 2 computes
-- Input: N summaries (strings) + 1 reference summary (string).
-- For each of the N summaries: compute similarity against the reference (embedding cosine, TF-IDF cosine).
-- Output: N individual scores per metric, plus mean/min/std across those N scores.
-- No pairwise N×N matrix — the matrix is replaced by a vector of N scores.
-
-### Proposed Lambda request shape for the new `POST /gold-compare` endpoint
-```json
-{
-  "texts": ["summary_1", "summary_2", ...],   // N strings (2–200)
-  "reference": "the gold standard summary"     // 1 string
-}
-```
-
-### Proposed Lambda response shape
-```json
-{
-  "reference_embedding": [...1024 floats...],
-  "embedding_cosine": {
-    "scores": [float, ...],      // one per text, against reference
-    "mean": float,
-    "min": float,
-    "max": float,
-    "std": float,
-    "n": int
-  },
-  "tfidf_cosine": {
-    "scores": [float, ...],
-    "mean": float,
-    "min": float,
-    "max": float,
-    "std": float,
-    "n": int
-  }
-}
+For the gold standard use case (N texts vs 1 reference), this would be called as:
+```python
+_, _, F1s = scorer.score(summaries, [reference] * len(summaries))
+# F1s is a torch.Tensor of shape (N,)
+bertscore_scores = F1s.tolist()
 ```
 
 ---
 
-## 9. No Existing Gold Standard Lambda
+## 9. CI/CD Build Environment
 
-There is no existing gold standard Lambda or tool beyond what is described in the plan. The `tools/consistency_evaluator.py` and `tools/consistency_evaluator_cloud.py` files exist but are Pathway 1 (pairwise variability). No `gold_standard_evaluator.py` or `gold_comparator` Lambda directory exists yet.
+**File:** `/workspace/active_repo/.github/workflows/ci.yml`
+
+- Tests run on `ubuntu-latest` with Python 3.11.
+- CPU-only torch installed explicitly.
+- HuggingFace model cache stored via `actions/cache@v4` keyed to `hf-models-all-minilm-v2`.
+- BERTScore tests in `test_consistency.py` are marked `slow` and excluded from the default run (`pytest -m "not slow"`).
+
+**File:** `/workspace/active_repo/.github/workflows/deploy.yml`
+
+- Manually triggered (`workflow_dispatch`).
+- Calls `scripts/build_lambdas.sh` then `terraform apply`.
+- No step that builds or pushes any container image.
 
 ---
 
-## Summary of New Files/Changes Required
+## 10. frontend/gold.js — Full API Call Flow
 
-### New files
-| File | Purpose |
-|---|---|
-| `lambda/gold_comparator/handler.py` | New Lambda: accepts `{texts, reference}`, returns per-text similarity scores against reference |
-| `frontend/gold-standard.html` | New page: same structure as `test.html` but with a second file picker for the reference |
-| `frontend/gold-standard.js` | Page logic: same job submission/polling as `test.js`, plus reference upload, calls `POST /gold-compare` |
+**File:** `/workspace/active_repo/frontend/gold.js`
 
-### Infra changes
+The flow is:
+1. User picks a document file and a reference text file in the browser.
+2. The document is uploaded N times in parallel (staggered 200 ms each) via `POST /presign` → S3 presigned POST → pipeline runs.
+3. All N jobs are polled concurrently (`GET /jobs/{jobId}` every 5 s, 10-minute max).
+4. Completed jobs: `GET /summaries/{jobId}` fetches the summary text.
+5. Single call to `POST /gold-compare` with `{ texts: succeededSummaries, reference: referenceText }`.
+6. Results displayed in `showGoldPanel()` and downloaded as a zip via `buildAndDownloadZip()`.
+
+### Frontend response consumption — hardcoded metric keys
+
+`showGoldPanel()` at lines 272–302 iterates a **hardcoded** metrics array:
+```js
+const metrics = [
+  { key: 'embedding_cosine', title: 'Titan Embedding Cosine vs Reference' },
+  { key: 'rouge1',           title: 'ROUGE-1 F1 vs Reference' },
+];
+```
+
+The per-run score table at lines 304–345 hardcodes three columns: `'Run'`, `'Emb Cosine'`, `'ROUGE-1 F1'`, reading from `comparison.embedding_cosine.scores` and `comparison.rouge1.scores`.
+
+`buildGoldReport()` at lines 350–387 also hardcodes `rouge1` key references and labels.
+
+**Replacing or renaming `rouge1` → `bertscore_f1` requires updating `showGoldPanel()`, `buildGoldReport()`, and the column header array in `gold.js`.** The zip contains `gold_comparison.json` (the raw API response) and `gold_comparison_report.txt` (the formatted text), so report labels also need updating.
+
+---
+
+## 11. tests/test_gold_comparator.py — Test Contract
+
+**File:** `/workspace/active_repo/tests/test_gold_comparator.py`
+
+Line 134 asserts the exact response key set:
+```python
+assert set(body.keys()) == {"embedding_cosine", "rouge1"}
+```
+
+Line 139 asserts:
+```python
+assert "tfidf_cosine" not in body
+```
+
+**Any change to the response shape requires updating this test file.**
+
+---
+
+## 12. Feasible Approaches for Cloud BERTScore
+
+### Why the Lambda layer approach is ruled out
+- `bert-score==0.3.13` depends on `torch`, `transformers`, and `numpy`.
+- CPU-only torch for aarch64 Linux is ~200 MB stripped. Layer limit is 50 MB zipped / 250 MB unzipped.
+- The layer approach is definitively ruled out.
+
+### Option A — Lambda Container Image (recommended, lowest infra lift)
+
+Replace the zip-based `gold_comparator` Lambda with a container image. Lambda supports images up to 10 GB. The image would bundle Python 3.12 + `bert-score==0.3.13` + CPU-only torch + a pre-cached model (baked in at image build time to avoid HuggingFace downloads on cold start).
+
+**Model choice tradeoff:**
+- `microsoft/deberta-large-mnli` — what local tools use, ~900 MB, highest quality.
+- `distilbert-base-uncased` — ~270 MB, used in CI, lower quality but viable.
+- `microsoft/deberta-xlarge-mnli` — ~1.5 GB, best quality, slower inference.
+
+**New infra resources required:**
+- `aws_ecr_repository.gold_comparator` — ECR repo for the image.
+- `aws_lambda_function.gold_comparator`: change from `filename`/`source_code_hash`/`handler`/`runtime` to `package_type = "Image"` + `image_uri = "${aws_ecr_repository.gold_comparator.repository_url}:latest"`.
+- Remove `data "archive_file" "gold_comparator"` from lambda.tf (no longer needed).
+- New `lambda/gold_comparator/Dockerfile`.
+- Build+push step in deploy workflow: `docker build` + `docker push` before `terraform apply`.
+- No change to the `gold_comparator_bedrock` IAM policy — it already covers Titan embeddings.
+- Lambda execution role does not need ECR permissions (the Lambda service pulls the image, not the function itself).
+
+**Timeout and memory concerns:**
+- Current `timeout = 30` and `memory_size = 256` are inadequate for model inference on CPU.
+- BERTScore inference on CPU for N=200 medical summaries (~300 words each) against a reference could take 120–600+ seconds.
+- The API Gateway hard limit is 29 seconds. A batch of 200 will exceed this.
+- Recommended mitigations: (a) cap the `texts` array at a lower limit (e.g., 50) for BERTScore, keeping 200 for the Titan embedding metric only; or (b) rearchitect as async (adds significant complexity); or (c) increase `memory_size` to 3008–10240 MB to speed up CPU inference.
+- A realistic `memory_size` of 3008 MB and `timeout` of 120 s with a batch cap of 20–30 texts is workable within the API GW limit for typical medical summary lengths.
+
+### Option B — Bedrock-Native Approximation (no new infra, not true BERTScore)
+
+The `gold_comparator` role already has `bedrock:InvokeModel` on `*`. Titan embeddings already provide a strong semantic similarity signal. There is no AWS-managed BERTScore endpoint. This option cannot produce true BERTScore.
+
+### Option C — Async Lambda + Polling
+
+Client submits, receives a job token, polls until complete. Requires new SQS or DynamoDB job tracking and frontend changes to add a polling loop for the comparison step. The current frontend treats `POST /gold-compare` as fully synchronous. High infra and frontend complexity.
+
+### Option D — ECS Fargate On-Demand Task
+
+Lambda triggers a one-shot Fargate task; results stored in S3/DynamoDB; frontend polls. No existing ECS infrastructure. Highest infrastructure lift.
+
+---
+
+## 13. Complete List of Files That Must Change
+
+For the Lambda container image approach (Option A):
+
 | File | Change |
 |---|---|
-| `infra/cloudwatch.tf` | Append `"gold-comparator"` to `lambda_function_names` list |
-| `infra/lambda.tf` | Add `data.archive_file.gold_comparator` + `aws_lambda_function.gold_comparator` |
-| `infra/iam.tf` | Add `aws_iam_role.gold_comparator` + policies (logs, bedrock invoke, xray) |
-| `infra/api_gateway.tf` | Add integration, route (`POST /gold-compare`), and Lambda permission |
+| `lambda/gold_comparator/handler.py` | Replace `_rouge1_f1` with BERTScore; update response key from `rouge1` to `bertscore_f1`; import `bert_score` |
+| `lambda/gold_comparator/Dockerfile` | New file — build image with Python 3.12, bert-score, CPU torch, pre-cache model |
+| `infra/lambda.tf` | Remove `data "archive_file" "gold_comparator"`; change `aws_lambda_function.gold_comparator` to `package_type = "Image"`, add `image_uri`; increase `timeout` and `memory_size`; add `aws_ecr_repository.gold_comparator` |
+| `infra/iam.tf` | No changes required (bedrock policy already covers `*`) |
+| `frontend/gold.js` | Update `showGoldPanel()` metrics array, `buildGoldReport()` labels, table column header — change `rouge1` → `bertscore_f1` and update display title |
+| `tests/test_gold_comparator.py` | Update `test_top_level_keys` assertion from `{"embedding_cosine", "rouge1"}` to `{"embedding_cosine", "bertscore_f1"}`; update any ROUGE-specific tests |
+| `.github/workflows/deploy.yml` | Add `docker build` + `docker push` steps before `terraform apply` |
+| `scripts/build_lambdas.sh` (or new script) | Optionally add image build logic; or handle in deploy.yml directly |
 
-### Frontend deploy
-- `scripts/deploy_frontend.sh` syncs the `frontend/` directory to S3. No changes needed to the deploy script; `gold-standard.html` and `gold-standard.js` will be synced automatically.
-- `config.js` is shared by all pages — no change needed.
-- CloudFront may need `gold-standard.html` added to the invalidation pattern, but the existing `/*` invalidation covers it.
+**Files that do NOT need to change:**
+- `infra/api_gateway.tf` — route, integration, and Lambda permission are already correct.
+- `infra/iam.tf` — existing `gold_comparator_bedrock` policy already covers Titan embeddings.
+- `frontend/gold.html` — no structural change needed; column labels are in gold.js, not HTML.
+- `lambda/requirements.txt` — this is for the shared Lambda layer, not the gold_comparator.
 
 ---
 
-## Side-Effects / Risks for the Planner
+## 14. Key Side-Effects and Risks
 
-1. **Comparator timeout**: The existing comparator `timeout = 30s`. For N=200 texts + 1 reference, embedding N+1 texts via Titan sequentially could approach or exceed 30 s. Consider 60 s timeout for the gold comparator or a smaller default N cap (e.g. 50).
+1. **API Gateway 29-second hard limit** — BERTScore on CPU is slow. With a typical medical summary of 300–500 words and N=20 texts, inference takes ~30–90 seconds on CPU even with 3 GB Lambda memory. The 29-second limit means the API will time out for all but the smallest batches unless memory is maximized and the batch is capped at ~5–10 texts for BERTScore, or the architecture is made async.
 
-2. **Memory**: The existing comparator uses `memory_size = 256`. Should be sufficient for the gold comparator (same pure-Python approach, no ML libraries loaded into the Lambda).
+2. **Cold start latency** — Lambda container cold starts are 5–15 seconds for large images. The BERTScorer model also needs to be loaded from disk on cold start (even if baked into the image). With `microsoft/deberta-large-mnli`, expect 10–20 second model load time in addition to cold start. Provisioned concurrency would eliminate cold starts at extra cost.
 
-3. **Bedrock permissions**: The gold comparator needs `bedrock:InvokeModel` on `*` for Titan Text Embeddings v2 (`amazon.titan-embed-text-v2:0`). This is the same permission as the existing `comparator_bedrock` policy — copy verbatim.
+3. **Baking the model into the image** — The Dockerfile must run `python -c "from bert_score import BERTScorer; BERTScorer(model_type='...')"` at image build time to pre-cache the model. Without this, the Lambda would attempt to download the model from HuggingFace on every cold start — which will fail if the Lambda has no internet access, or succeed only if a NAT gateway is configured.
 
-4. **CORS**: The existing API Gateway CORS config allows `POST` from the CloudFront origin. No change needed — `POST /gold-compare` is covered.
+4. **VPC/internet access** — The current `gold_comparator` Lambda has no VPC config and accesses the internet freely (for Bedrock API calls, which go through AWS service endpoints). A container image Lambda also needs to pull from ECR. If VPC is added later, NAT or VPC endpoints are required. Currently no VPC config exists, so this is not an issue.
 
-5. **Cognito redirect**: The new page uses the same `REDIRECT_URI = window.location.origin + '/'` trick as `test.js`. No new Cognito callback URL needed.
+5. **ECR image lifecycle** — The deploy workflow will need to push a new image tag on every deploy. Use a consistent tag (e.g., `latest` or a git SHA) and configure `image_uri` accordingly. ECR lifecycle policies should be added to avoid accumulating stale images.
 
-6. **Reference upload**: The reference is a text string uploaded as a file. The gold standard page should read it client-side (e.g. `file.text()`) and send it as the `reference` field in the `POST /gold-compare` body — not as a presigned upload. This avoids a separate pipeline run for the reference.
+6. **Test isolation** — `tests/test_gold_comparator.py` mocks `boto3.client` and tests the handler module directly. After the change, `bert_score` will be imported at the top of the handler. The test file will need `bert_score` and `torch` available in the test environment, or the BERTScorer must be mocked. The existing CI installs both, so this should work, but `torch` is a heavy dependency for the test suite.
 
-7. **No zip changes needed**: The gold standard page may or may not offer a zip download. If it does, the same JSZip CDN script can be reused. The zip would contain: `summary_NN.txt` files, `reference.txt`, `comparison.json`, and a text report.
-
-8. **Matrix display**: The gold standard page does not produce an N×N matrix. Replace the `.comparison-matrix-heading` + `.matrix-scroll` section with a ranked list or bar-style table of N scores (one row per run). Existing CSS `.sim-matrix` table structure can be repurposed as a 2-column table: "Run | Score".
+7. **The `_score_stats` helper is reusable** — The existing `_score_stats(scores)` function in `handler.py` takes a plain Python list and returns the stats dict. It can be reused for the BERTScore output without modification — just pass `F1s.tolist()` as the scores list.

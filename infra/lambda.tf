@@ -111,12 +111,6 @@ data "archive_file" "comparator" {
   output_path = "${path.module}/lambda_packages/comparator.zip"
 }
 
-data "archive_file" "gold_comparator" {
-  type        = "zip"
-  source_dir  = "${path.module}/../lambda/gold_comparator"
-  output_path = "${path.module}/lambda_packages/gold_comparator.zip"
-}
-
 data "archive_file" "fail_handler" {
   type        = "zip"
   source_dir  = "${path.module}/../lambda/fail_handler"
@@ -410,16 +404,46 @@ resource "aws_lambda_function" "comparator" {
   depends_on = [aws_cloudwatch_log_group.lambda]
 }
 
+resource "aws_ecr_repository" "gold_comparator" {
+  name                 = "${local.name_prefix}-gold-comparator"
+  image_tag_mutability = "MUTABLE"
+  force_delete         = true
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  tags = local.common_tags
+}
+
+resource "aws_ecr_lifecycle_policy" "gold_comparator" {
+  repository = aws_ecr_repository.gold_comparator.name
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "Keep only the 3 most recent images"
+      selection = {
+        tagStatus   = "any"
+        countType   = "imageCountMoreThan"
+        countNumber = 3
+      }
+      action = { type = "expire" }
+    }]
+  })
+}
+
 resource "aws_lambda_function" "gold_comparator" {
-  function_name    = "${local.name_prefix}-gold-comparator"
-  filename         = data.archive_file.gold_comparator.output_path
-  source_code_hash = data.archive_file.gold_comparator.output_base64sha256
-  handler          = "handler.lambda_handler"
-  runtime          = "python3.12"
-  architectures    = ["arm64"]
-  role             = aws_iam_role.gold_comparator.arn
-  timeout          = 30
-  memory_size      = 256
+  function_name = "${local.name_prefix}-gold-comparator"
+  package_type  = "Image"
+  image_uri     = "${aws_ecr_repository.gold_comparator.repository_url}:latest"
+  architectures = ["arm64"]
+  role          = aws_iam_role.gold_comparator.arn
+  timeout       = 120
+  memory_size   = 5120
+
+  lifecycle {
+    ignore_changes = [image_uri]
+  }
 
   tracing_config {
     mode = "Active"
