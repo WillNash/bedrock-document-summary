@@ -75,7 +75,7 @@ variable "upload_max_size_bytes" {
 variable "daily_upload_limit" {
   type        = number
   description = "Maximum documents a single user can upload per calendar day (UTC)"
-  default     = 20
+  default     = 200
 
   validation {
     condition     = var.daily_upload_limit >= 1

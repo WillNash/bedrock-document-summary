@@ -9,6 +9,7 @@ locals {
     "validator",
     "renderer",
     "fail-handler",
+    "comparator",
   ]
 }
 

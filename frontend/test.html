@@ -26,7 +26,7 @@
           </div>
           <div class="run-config">
             <label for="run-count">Runs</label>
-            <input type="number" id="run-count" min="1" max="20" value="3" />
+            <input type="number" id="run-count" min="1" max="200" value="3" />
           </div>
           <button id="run-btn" class="btn-primary" disabled>Run Test</button>
         </div>
@@ -35,6 +35,16 @@
           <p id="progress-header" class="progress-header"></p>
           <div id="run-grid" class="run-grid"></div>
           <div id="error-log" class="hidden"></div>
+        </div>
+
+        <div id="comparison-panel" class="hidden">
+          <div class="comparison-header">
+            <h2>Similarity Results</h2>
+            <span id="comparison-run-count" class="comparison-subhead"></span>
+          </div>
+          <div id="comparison-metrics" class="comparison-metrics"></div>
+          <div class="comparison-matrix-heading">Pairwise Matrix — Embedding Cosine</div>
+          <div id="similarity-matrix" class="matrix-scroll"></div>
         </div>
 
         <div class="signout-row">

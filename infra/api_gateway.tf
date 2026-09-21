@@ -56,6 +56,13 @@ resource "aws_cloudwatch_log_group" "api_gateway" {
 
 # ── Integrations ────────────────────────────────────────────────────────────
 
+resource "aws_apigatewayv2_integration" "comparator" {
+  api_id                 = aws_apigatewayv2_api.main.id
+  integration_type       = "AWS_PROXY"
+  integration_uri        = aws_lambda_function.comparator.invoke_arn
+  payload_format_version = "2.0"
+}
+
 resource "aws_apigatewayv2_integration" "api_presign" {
   api_id                 = aws_apigatewayv2_api.main.id
   integration_type       = "AWS_PROXY"
@@ -78,6 +85,14 @@ resource "aws_apigatewayv2_integration" "api_summary" {
 }
 
 # ── Routes ────────────────────────────────────────────────────────────────────
+
+resource "aws_apigatewayv2_route" "compare" {
+  api_id             = aws_apigatewayv2_api.main.id
+  route_key          = "POST /compare"
+  authorization_type = "JWT"
+  authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
+  target             = "integrations/${aws_apigatewayv2_integration.comparator.id}"
+}
 
 resource "aws_apigatewayv2_route" "presign" {
   api_id             = aws_apigatewayv2_api.main.id
@@ -104,6 +119,14 @@ resource "aws_apigatewayv2_route" "summary" {
 }
 
 # ── Lambda permissions for API Gateway ────────────────────────────────────────
+
+resource "aws_lambda_permission" "apigw_comparator" {
+  statement_id  = "AllowAPIGatewayInvokeComparator"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.comparator.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.main.execution_arn}/*/*"
+}
 
 resource "aws_lambda_permission" "apigw_presign" {
   statement_id  = "AllowAPIGatewayInvokePresign"
