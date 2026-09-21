@@ -52,15 +52,15 @@ FUNCTION_NAME=$(terraform -chdir="$INFRA_DIR" output -raw gold_comparator_functi
 aws ecr get-login-password --region "$AWS_REGION" | \
   docker login --username AWS --password-stdin "${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 
-# Build image (arm64, --provenance=false required for Lambda container image compatibility)
+# Build and push image in one step (arm64, --provenance=false required for Lambda compatibility).
+# --push is used instead of a separate docker push because the docker-container buildx driver
+# (used in CI) does not export to the local daemon — it must push directly to the registry.
 docker buildx build \
   --platform linux/arm64 \
   --provenance=false \
+  --push \
   -t "${ECR_URI}:latest" \
   "$SCRIPT_DIR/../lambda/gold_comparator/"
-
-# Push image
-docker push "${ECR_URI}:latest"
 
 # First-deploy exit: Lambda not yet created — image is in ECR, run terraform apply next
 if [ -z "$FUNCTION_NAME" ]; then
