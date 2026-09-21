@@ -1,4 +1,4 @@
-FROM public.ecr.aws/lambda/python:3.12
+FROM public.ecr.aws/lambda/python:3.11
 
 ENV TRANSFORMERS_CACHE=/var/task/hf_cache \
     HF_HOME=/var/task/hf_cache \
