@@ -56,6 +56,12 @@ jobs:
             -target=aws_ecr_repository.gold_comparator \
             -target=aws_ecr_lifecycle_policy.gold_comparator
 
+      - name: Set up QEMU (required for arm64 image build on x86 runner)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build and push gold_comparator image
         run: ./scripts/build_gold_comparator.sh
 
