@@ -25,36 +25,45 @@ def lambda_handler(event, context):
 
         job_id = parts[1]
         state_machine_arn = os.environ['STATE_MACHINE_ARN']
-        jobs_table = os.environ['JOBS_TABLE']
+        jobs_table_name = os.environ['JOBS_TABLE']
 
-        execution_input = json.dumps({
+        # One extra read to fetch experiment context — keeps the S3 key pattern clean.
+        # experiment_id and run_number are written by experiment_starter at job creation.
+        jobs_table = dynamodb.Table(jobs_table_name)
+        job_response = jobs_table.get_item(
+            Key={'job_id': job_id},
+            ProjectionExpression='experiment_id, run_number',
+        )
+        job_item = job_response.get('Item', {})
+        experiment_id = job_item.get('experiment_id')
+        run_number = job_item.get('run_number')
+
+        execution_input = {
             'job_id': job_id,
             'bucket': bucket,
             'key': key,
-        })
+        }
+        if experiment_id:
+            execution_input['experiment_id'] = experiment_id
+            execution_input['run_number'] = int(run_number)
 
         try:
             sfn_client.start_execution(
                 stateMachineArn=state_machine_arn,
                 name=job_id,
-                input=execution_input,
+                input=json.dumps(execution_input),
             )
             logger.info(json.dumps({'job_id': job_id, 'action': 'execution_started', 'key': key}))
         except ClientError as e:
             if e.response['Error']['Code'] == 'ExecutionAlreadyExists':
-                # S3 event retry — execution is already running. Fall through
-                # to the DynamoDB update below in case the first delivery's
-                # write failed before completing.
                 logger.info(json.dumps({'job_id': job_id, 'action': 'execution_already_exists'}))
             else:
                 raise
 
-        # Update status to RUNNING. Use a condition so we never overwrite
-        # a terminal status (COMPLETED/FAILED) if the pipeline has already
-        # finished by the time a retry event arrives.
-        table = dynamodb.Table(jobs_table)
+        # Update status to RUNNING. Condition prevents overwriting a terminal status
+        # if a retry event arrives after the pipeline has already finished.
         try:
-            table.update_item(
+            jobs_table.update_item(
                 Key={'job_id': job_id},
                 UpdateExpression='SET #s = :running',
                 ConditionExpression='#s = :pending',
@@ -63,7 +72,6 @@ def lambda_handler(event, context):
             )
         except ClientError as e:
             if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
-                # Status has already been updated past PENDING — nothing to do.
                 logger.info(json.dumps({'job_id': job_id, 'action': 'status_already_progressed'}))
             else:
                 raise

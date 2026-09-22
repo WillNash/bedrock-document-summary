@@ -3,9 +3,11 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from botocore.exceptions import ClientError
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -32,6 +34,105 @@ jinja_env = Environment(
 
 s3_client = boto3.client('s3')
 dynamodb = boto3.resource('dynamodb')
+sfn_client = boto3.client('stepfunctions')
+
+
+def _write_experiment_outputs(event, summary_text, summaries_bucket, completed_at):
+    experiment_id = event['experiment_id']
+    run_number = int(event['run_number'])
+    run_prefix = f'experiments/{experiment_id}/runs/{run_number}'
+
+    s3_client.put_object(
+        Bucket=summaries_bucket,
+        Key=f'{run_prefix}/summary.txt',
+        Body=summary_text.encode('utf-8'),
+        ContentType='text/plain; charset=utf-8',
+    )
+
+    usage = event.get('usage_stats', {})
+    classifier_stats = usage.get('classifier', {})
+    extractor_stats = usage.get('extractor', {})
+
+    metadata = {
+        'experiment_id': experiment_id,
+        'run_number': run_number,
+        'job_id': event['job_id'],
+        'source_document_key': event['key'],
+        'doc_type': event['doc_type'],
+        'classification': {
+            'model_id': classifier_stats.get('model', ''),
+            'prompt_arn': classifier_stats.get('prompt_arn', ''),
+            'prompt_version': classifier_stats.get('prompt_version', ''),
+            'guardrail_id': classifier_stats.get('guardrail_id', ''),
+            'guardrail_version': classifier_stats.get('guardrail_version', ''),
+            'input_tokens': classifier_stats.get('input_tokens', 0),
+            'output_tokens': classifier_stats.get('output_tokens', 0),
+        },
+        'extraction': {
+            'model_id': extractor_stats.get('model', ''),
+            'prompt_arn': extractor_stats.get('prompt_arn', ''),
+            'prompt_version': extractor_stats.get('prompt_version', ''),
+            'input_tokens': extractor_stats.get('input_tokens', 0),
+            'output_tokens': extractor_stats.get('output_tokens', 0),
+        },
+        'timestamp': completed_at,
+    }
+
+    s3_client.put_object(
+        Bucket=summaries_bucket,
+        Key=f'{run_prefix}/metadata.json',
+        Body=json.dumps(metadata).encode('utf-8'),
+        ContentType='application/json',
+    )
+
+    logger.info(json.dumps({
+        'job_id': event['job_id'],
+        'experiment_id': experiment_id,
+        'run_number': run_number,
+        'action': 'experiment_run_written',
+    }))
+
+
+def _record_experiment_success(experiment_id, summaries_bucket):
+    experiments_table = dynamodb.Table(os.environ['EXPERIMENTS_TABLE'])
+    response = experiments_table.update_item(
+        Key={'experiment_id': experiment_id},
+        UpdateExpression='ADD completed_n :one, successful_n :one',
+        ExpressionAttributeValues={':one': Decimal('1')},
+        ReturnValues='ALL_NEW',
+    )
+    attrs = response['Attributes']
+    completed_n = int(attrs['completed_n'])
+    expected_n = int(attrs['expected_n'])
+    successful_n = int(attrs.get('successful_n', 0))
+
+    if completed_n == expected_n:
+        _maybe_start_comparison(experiment_id, summaries_bucket, expected_n, successful_n)
+
+
+def _maybe_start_comparison(experiment_id, summaries_bucket, expected_n, successful_n):
+    try:
+        sfn_client.start_execution(
+            stateMachineArn=os.environ['COMPARISON_SM_ARN'],
+            name=experiment_id,
+            input=json.dumps({
+                'experiment_id': experiment_id,
+                'summaries_bucket': summaries_bucket,
+                'expected_n': expected_n,
+                'successful_n': successful_n,
+            }),
+        )
+        logger.info(json.dumps({
+            'experiment_id': experiment_id,
+            'action': 'comparison_sm_started',
+            'successful_n': successful_n,
+            'expected_n': expected_n,
+        }))
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'ExecutionAlreadyExists':
+            logger.info(json.dumps({'experiment_id': experiment_id, 'action': 'comparison_already_started'}))
+        else:
+            raise
 
 
 def lambda_handler(event, context):
@@ -60,6 +161,7 @@ def lambda_handler(event, context):
     )
 
     completed_at = datetime.now(timezone.utc).isoformat()
+
     table = dynamodb.Table(os.environ['JOBS_TABLE'])
     table.update_item(
         Key={'job_id': job_id},
@@ -73,6 +175,11 @@ def lambda_handler(event, context):
     )
 
     logger.info(json.dumps({'job_id': job_id, 'doc_type': doc_type, 'action': 'rendered', 'summary_key': summary_key}))
+
+    experiment_id = event.get('experiment_id')
+    if experiment_id:
+        _write_experiment_outputs(event, summary_text, summaries_bucket, completed_at)
+        _record_experiment_success(experiment_id, summaries_bucket)
 
     return {
         'job_id': job_id,

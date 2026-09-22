@@ -1,3 +1,29 @@
+resource "aws_dynamodb_table" "experiments" {
+  name         = "${local.name_prefix}-experiments"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "experiment_id"
+
+  attribute {
+    name = "experiment_id"
+    type = "S"
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.phi.arn
+  }
+
+  tags = local.common_tags
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
 resource "aws_dynamodb_table" "jobs" {
   name         = "${local.name_prefix}-jobs"
   billing_mode = "PAY_PER_REQUEST"

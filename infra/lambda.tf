@@ -360,8 +360,10 @@ resource "aws_lambda_function" "renderer" {
 
   environment {
     variables = {
-      SUMMARIES_BUCKET = aws_s3_bucket.summaries.bucket
-      JOBS_TABLE       = aws_dynamodb_table.jobs.name
+      SUMMARIES_BUCKET  = aws_s3_bucket.summaries.bucket
+      JOBS_TABLE        = aws_dynamodb_table.jobs.name
+      EXPERIMENTS_TABLE = aws_dynamodb_table.experiments.name
+      COMPARISON_SM_ARN = aws_sfn_state_machine.comparison.arn
     }
   }
 
@@ -471,7 +473,10 @@ resource "aws_lambda_function" "fail_handler" {
 
   environment {
     variables = {
-      JOBS_TABLE = aws_dynamodb_table.jobs.name
+      JOBS_TABLE        = aws_dynamodb_table.jobs.name
+      SUMMARIES_BUCKET  = aws_s3_bucket.summaries.bucket
+      EXPERIMENTS_TABLE = aws_dynamodb_table.experiments.name
+      COMPARISON_SM_ARN = aws_sfn_state_machine.comparison.arn
     }
   }
 
@@ -486,5 +491,277 @@ resource "aws_lambda_function" "fail_handler" {
 
   tags = local.common_tags
 
+  depends_on = [aws_cloudwatch_log_group.lambda]
+}
+
+# ── Comparison pipeline archive sources ─────────────────────────────────────
+
+data "archive_file" "experiment_starter" {
+  type        = "zip"
+  source_dir  = "${path.module}/../lambda/experiment_starter"
+  output_path = "${path.module}/lambda_packages/experiment_starter.zip"
+}
+
+data "archive_file" "summary_collector" {
+  type        = "zip"
+  source_dir  = "${path.module}/../lambda/summary_collector"
+  output_path = "${path.module}/lambda_packages/summary_collector.zip"
+}
+
+data "archive_file" "variance_scorer" {
+  type        = "zip"
+  source_dir  = "${path.module}/../lambda/variance_scorer"
+  output_path = "${path.module}/lambda_packages/variance_scorer.zip"
+}
+
+data "archive_file" "report_generator" {
+  type        = "zip"
+  source_dir  = "${path.module}/../lambda/report_generator"
+  output_path = "${path.module}/lambda_packages/report_generator.zip"
+}
+
+data "archive_file" "report_writer" {
+  type        = "zip"
+  source_dir  = "${path.module}/../lambda/report_writer"
+  output_path = "${path.module}/lambda_packages/report_writer.zip"
+}
+
+data "archive_file" "comparison_fail_handler" {
+  type        = "zip"
+  source_dir  = "${path.module}/../lambda/comparison_fail_handler"
+  output_path = "${path.module}/lambda_packages/comparison_fail_handler.zip"
+}
+
+# ── Comparison pipeline Lambda functions ─────────────────────────────────────
+
+resource "aws_lambda_function" "experiment_starter" {
+  function_name    = "${local.name_prefix}-experiment-starter"
+  filename         = data.archive_file.experiment_starter.output_path
+  source_code_hash = data.archive_file.experiment_starter.output_base64sha256
+  handler          = "handler.lambda_handler"
+  runtime          = "python3.12"
+  architectures    = ["arm64"]
+  role             = aws_iam_role.experiment_starter.arn
+  timeout          = 120
+  memory_size      = 256
+
+  environment {
+    variables = {
+      UPLOAD_BUCKET     = aws_s3_bucket.uploads.bucket
+      SUMMARIES_BUCKET  = aws_s3_bucket.summaries.bucket
+      JOBS_TABLE        = aws_dynamodb_table.jobs.name
+      EXPERIMENTS_TABLE = aws_dynamodb_table.experiments.name
+    }
+  }
+
+  tracing_config {
+    mode = "Active"
+  }
+
+  logging_config {
+    log_format = "JSON"
+    log_group  = aws_cloudwatch_log_group.lambda["experiment-starter"].name
+  }
+
+  tags       = local.common_tags
+  depends_on = [aws_cloudwatch_log_group.lambda]
+}
+
+resource "aws_lambda_function" "summary_collector" {
+  function_name    = "${local.name_prefix}-summary-collector"
+  filename         = data.archive_file.summary_collector.output_path
+  source_code_hash = data.archive_file.summary_collector.output_base64sha256
+  handler          = "handler.lambda_handler"
+  runtime          = "python3.12"
+  architectures    = ["arm64"]
+  role             = aws_iam_role.comparison_processing.arn
+  timeout          = 60
+  memory_size      = 256
+
+  environment {
+    variables = {
+      EXPERIMENTS_TABLE = aws_dynamodb_table.experiments.name
+    }
+  }
+
+  tracing_config {
+    mode = "Active"
+  }
+
+  logging_config {
+    log_format = "JSON"
+    log_group  = aws_cloudwatch_log_group.lambda["summary-collector"].name
+  }
+
+  tags       = local.common_tags
+  depends_on = [aws_cloudwatch_log_group.lambda]
+}
+
+resource "aws_lambda_function" "variance_scorer" {
+  function_name    = "${local.name_prefix}-variance-scorer"
+  filename         = data.archive_file.variance_scorer.output_path
+  source_code_hash = data.archive_file.variance_scorer.output_base64sha256
+  handler          = "handler.lambda_handler"
+  runtime          = "python3.12"
+  architectures    = ["arm64"]
+  role             = aws_iam_role.comparison_processing.arn
+  timeout          = 300
+  memory_size      = 1024
+
+  tracing_config {
+    mode = "Active"
+  }
+
+  logging_config {
+    log_format = "JSON"
+    log_group  = aws_cloudwatch_log_group.lambda["variance-scorer"].name
+  }
+
+  tags       = local.common_tags
+  depends_on = [aws_cloudwatch_log_group.lambda]
+}
+
+resource "aws_ecr_repository" "gold_scorer" {
+  name                 = "${local.name_prefix}-gold-scorer"
+  image_tag_mutability = "MUTABLE"
+  force_delete         = true
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  tags = local.common_tags
+}
+
+resource "aws_ecr_lifecycle_policy" "gold_scorer" {
+  repository = aws_ecr_repository.gold_scorer.name
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "Keep only the 3 most recent images"
+      selection = {
+        tagStatus   = "any"
+        countType   = "imageCountMoreThan"
+        countNumber = 3
+      }
+      action = { type = "expire" }
+    }]
+  })
+}
+
+resource "aws_lambda_function" "gold_scorer" {
+  function_name = "${local.name_prefix}-gold-scorer"
+  package_type  = "Image"
+  image_uri     = "${aws_ecr_repository.gold_scorer.repository_url}:latest"
+  architectures = ["arm64"]
+  role          = aws_iam_role.comparison_processing.arn
+  timeout       = 300
+  memory_size   = 5120
+
+  lifecycle {
+    ignore_changes = [image_uri]
+  }
+
+  tracing_config {
+    mode = "Active"
+  }
+
+  logging_config {
+    log_format = "JSON"
+    log_group  = aws_cloudwatch_log_group.lambda["gold-scorer"].name
+  }
+
+  tags       = local.common_tags
+  depends_on = [aws_cloudwatch_log_group.lambda]
+}
+
+resource "aws_lambda_function" "report_generator" {
+  function_name    = "${local.name_prefix}-report-generator"
+  filename         = data.archive_file.report_generator.output_path
+  source_code_hash = data.archive_file.report_generator.output_base64sha256
+  handler          = "handler.lambda_handler"
+  runtime          = "python3.12"
+  architectures    = ["arm64"]
+  role             = aws_iam_role.comparison_processing.arn
+  timeout          = 120
+  memory_size      = 512
+
+  environment {
+    variables = {
+      REPORT_MODEL_ID = var.bedrock_model_id
+    }
+  }
+
+  tracing_config {
+    mode = "Active"
+  }
+
+  logging_config {
+    log_format = "JSON"
+    log_group  = aws_cloudwatch_log_group.lambda["report-generator"].name
+  }
+
+  tags       = local.common_tags
+  depends_on = [aws_cloudwatch_log_group.lambda]
+}
+
+resource "aws_lambda_function" "report_writer" {
+  function_name    = "${local.name_prefix}-report-writer"
+  filename         = data.archive_file.report_writer.output_path
+  source_code_hash = data.archive_file.report_writer.output_base64sha256
+  handler          = "handler.lambda_handler"
+  runtime          = "python3.12"
+  architectures    = ["arm64"]
+  role             = aws_iam_role.comparison_processing.arn
+  timeout          = 30
+  memory_size      = 256
+
+  environment {
+    variables = {
+      EXPERIMENTS_TABLE = aws_dynamodb_table.experiments.name
+      SUMMARIES_BUCKET  = aws_s3_bucket.summaries.bucket
+    }
+  }
+
+  tracing_config {
+    mode = "Active"
+  }
+
+  logging_config {
+    log_format = "JSON"
+    log_group  = aws_cloudwatch_log_group.lambda["report-writer"].name
+  }
+
+  tags       = local.common_tags
+  depends_on = [aws_cloudwatch_log_group.lambda]
+}
+
+resource "aws_lambda_function" "comparison_fail_handler" {
+  function_name    = "${local.name_prefix}-comparison-fail-handler"
+  filename         = data.archive_file.comparison_fail_handler.output_path
+  source_code_hash = data.archive_file.comparison_fail_handler.output_base64sha256
+  handler          = "handler.lambda_handler"
+  runtime          = "python3.12"
+  architectures    = ["arm64"]
+  role             = aws_iam_role.comparison_fail_handler.arn
+  timeout          = 15
+  memory_size      = 128
+
+  environment {
+    variables = {
+      EXPERIMENTS_TABLE = aws_dynamodb_table.experiments.name
+    }
+  }
+
+  tracing_config {
+    mode = "Active"
+  }
+
+  logging_config {
+    log_format = "JSON"
+    log_group  = aws_cloudwatch_log_group.lambda["comparison-fail-handler"].name
+  }
+
+  tags       = local.common_tags
   depends_on = [aws_cloudwatch_log_group.lambda]
 }

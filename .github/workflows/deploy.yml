@@ -51,13 +51,15 @@ jobs:
       - name: Ensure Bedrock guardrail
         run: ./scripts/ensure_guardrail.sh >> $GITHUB_ENV
 
-      - name: Create ECR repository
-        # Must exist before the image push and before the Lambda can be created.
+      - name: Create ECR repositories
+        # Must exist before image pushes and before Lambdas can be created.
         # On subsequent deploys this is a fast no-op.
         run: |
           terraform -chdir=infra apply -auto-approve -input=false \
             -target=aws_ecr_repository.gold_comparator \
-            -target=aws_ecr_lifecycle_policy.gold_comparator
+            -target=aws_ecr_lifecycle_policy.gold_comparator \
+            -target=aws_ecr_repository.gold_scorer \
+            -target=aws_ecr_lifecycle_policy.gold_scorer
 
       - name: Set up QEMU (required for arm64 image build on x86 runner)
         uses: docker/setup-qemu-action@v3
@@ -65,31 +67,43 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and push gold_comparator image
-        run: ./scripts/build_gold_comparator.sh
+      - name: Build and push Docker images
+        run: |
+          ./scripts/build_gold_comparator.sh
+          ./scripts/build_gold_scorer.sh
 
       - name: Terraform Apply
         run: terraform -chdir=infra apply -auto-approve -input=false
 
-      - name: Pin gold_comparator Lambda to latest image
-        # On first deploy the Lambda was just created pointing to :latest tag — this
-        # pins it to the specific digest pushed above. On subsequent deploys it updates
-        # the running Lambda to the new image (Terraform ignores image_uri changes).
+      - name: Pin Docker Lambdas to latest image
+        # On first deploy the Lambdas were just created pointing to :latest — this pins
+        # them to the specific digest pushed above. On subsequent deploys it updates the
+        # running function to the new image (Terraform ignores image_uri changes).
         run: |
-          FUNCTION_NAME=$(terraform -chdir=infra output -raw gold_comparator_function_name 2>/dev/null || true)
-          if [[ ! "$FUNCTION_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-            echo "INFO: Lambda not yet deployed or output unavailable, skipping update."
-            exit 0
-          fi
-          aws lambda wait function-updated \
-            --function-name "$FUNCTION_NAME" \
-            --region "${AWS_DEFAULT_REGION}"
           ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
-          REPO=$(terraform -chdir=infra output -raw gold_comparator_ecr_repository_name 2>/dev/null || true)
-          aws lambda update-function-code \
-            --function-name "$FUNCTION_NAME" \
-            --image-uri "${ACCOUNT}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${REPO}:latest" \
-            --region "${AWS_DEFAULT_REGION}"
+
+          pin_lambda() {
+            local output_name="$1"
+            local repo_output="$2"
+            local FUNCTION_NAME
+            FUNCTION_NAME=$(terraform -chdir=infra output -raw "$output_name" 2>/dev/null || true)
+            if [[ ! "$FUNCTION_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+              echo "INFO: $output_name not yet deployed or output unavailable, skipping."
+              return
+            fi
+            local REPO
+            REPO=$(terraform -chdir=infra output -raw "$repo_output" 2>/dev/null || true)
+            aws lambda wait function-updated \
+              --function-name "$FUNCTION_NAME" \
+              --region "${AWS_DEFAULT_REGION}"
+            aws lambda update-function-code \
+              --function-name "$FUNCTION_NAME" \
+              --image-uri "${ACCOUNT}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${REPO}:latest" \
+              --region "${AWS_DEFAULT_REGION}"
+          }
+
+          pin_lambda gold_comparator_function_name gold_comparator_ecr_repository_name
+          pin_lambda gold_scorer_function_name gold_scorer_ecr_repository_name
 
       - name: Deploy frontend
         run: ./scripts/deploy_frontend.sh
