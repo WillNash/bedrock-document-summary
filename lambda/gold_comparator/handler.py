@@ -37,6 +37,11 @@ _scorer = BERTScorer(
     device="cpu",
     rescale_with_baseline=False,
 )
+# scibert's tokenizer_config.json omits model_max_length, so transformers defaults
+# to VERY_LARGE_INTEGER and sent_encode skips truncation. Force it to the model's
+# actual positional limit. 256 (not 512) keeps warm-Lambda inference under the
+# 29-second API Gateway timeout (BERT attention is O(n^2)).
+_scorer._tokenizer.model_max_length = 256
 
 
 def _embed(bedrock, text):

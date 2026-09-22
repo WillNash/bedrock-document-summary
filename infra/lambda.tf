@@ -438,7 +438,7 @@ resource "aws_lambda_function" "gold_comparator" {
   image_uri     = "${aws_ecr_repository.gold_comparator.repository_url}:latest"
   architectures = ["arm64"]
   role          = aws_iam_role.gold_comparator.arn
-  timeout       = 120
+  timeout       = 300
   memory_size   = 5120
 
   lifecycle {
