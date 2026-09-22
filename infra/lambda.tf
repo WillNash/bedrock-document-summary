@@ -408,7 +408,7 @@ resource "aws_lambda_function" "comparator" {
 
 resource "aws_ecr_repository" "gold_comparator" {
   name                 = "${local.name_prefix}-gold-comparator"
-  image_tag_mutability = "MUTABLE"
+  image_tag_mutability = "IMMUTABLE"
   force_delete         = true
 
   image_scanning_configuration {
@@ -437,15 +437,11 @@ resource "aws_ecr_lifecycle_policy" "gold_comparator" {
 resource "aws_lambda_function" "gold_comparator" {
   function_name = "${local.name_prefix}-gold-comparator"
   package_type  = "Image"
-  image_uri     = "${aws_ecr_repository.gold_comparator.repository_url}:latest"
+  image_uri     = "${aws_ecr_repository.gold_comparator.repository_url}:${var.gold_comparator_image_tag}"
   architectures = ["arm64"]
   role          = aws_iam_role.gold_comparator.arn
   timeout       = 300
   memory_size   = 5120
-
-  lifecycle {
-    ignore_changes = [image_uri]
-  }
 
   tracing_config {
     mode = "Active"
@@ -623,7 +619,7 @@ resource "aws_lambda_function" "variance_scorer" {
 
 resource "aws_ecr_repository" "gold_scorer" {
   name                 = "${local.name_prefix}-gold-scorer"
-  image_tag_mutability = "MUTABLE"
+  image_tag_mutability = "IMMUTABLE"
   force_delete         = true
 
   image_scanning_configuration {
@@ -652,15 +648,11 @@ resource "aws_ecr_lifecycle_policy" "gold_scorer" {
 resource "aws_lambda_function" "gold_scorer" {
   function_name = "${local.name_prefix}-gold-scorer"
   package_type  = "Image"
-  image_uri     = "${aws_ecr_repository.gold_scorer.repository_url}:latest"
+  image_uri     = "${aws_ecr_repository.gold_scorer.repository_url}:${var.gold_scorer_image_tag}"
   architectures = ["arm64"]
   role          = aws_iam_role.comparison_processing.arn
   timeout       = 300
   memory_size   = 5120
-
-  lifecycle {
-    ignore_changes = [image_uri]
-  }
 
   tracing_config {
     mode = "Active"

@@ -46,6 +46,30 @@ resource "aws_cloudwatch_metric_alarm" "sfn_throttled" {
   tags = local.common_tags
 }
 
+# Every invocation of comparison_fail_handler means a comparison SM failed after all
+# pipeline runs completed — the experiment result will not be produced.
+resource "aws_cloudwatch_metric_alarm" "comparison_fail_handler_invocations" {
+  alarm_name          = "${local.name_prefix}-comparison-failures"
+  alarm_description   = "comparison_fail_handler invocations — an experiment comparison pipeline has failed"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Invocations"
+  namespace           = "AWS/Lambda"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 0
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.comparison_fail_handler.function_name
+  }
+
+  alarm_actions = local.alert_actions
+  ok_actions    = local.alert_actions
+
+  tags = local.common_tags
+}
+
 # ── DLQ depth alarm ──────────────────────────────────────────────────────────
 
 resource "aws_cloudwatch_metric_alarm" "pipeline_starter_dlq" {

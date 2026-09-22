@@ -20,6 +20,7 @@ import logging
 import math
 import re
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import combinations
 
 import boto3
@@ -121,7 +122,11 @@ def lambda_handler(event, context):
         run_numbers.append(manifest['run_number'])
 
     logger.info(json.dumps({'action': 'embedding_runs', 'n': len(texts)}))
-    embeddings = [_embed(t) for t in texts]
+    embeddings = [None] * len(texts)
+    with ThreadPoolExecutor() as executor:
+        futures = {executor.submit(_embed, t): i for i, t in enumerate(texts)}
+        for future in as_completed(futures):
+            embeddings[futures[future]] = future.result()
 
     n = len(embeddings)
     emb_matrix = _embedding_sim_matrix(embeddings)

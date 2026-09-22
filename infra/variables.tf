@@ -100,6 +100,18 @@ variable "tags" {
   default     = {}
 }
 
+variable "gold_scorer_image_tag" {
+  type        = string
+  description = "ECR image tag for the gold_scorer Lambda container. Set by scripts/build_gold_scorer.sh using the git commit SHA."
+  default     = "latest"
+}
+
+variable "gold_comparator_image_tag" {
+  type        = string
+  description = "ECR image tag for the gold_comparator Lambda container. Set by scripts/build_gold_comparator.sh using the git commit SHA."
+  default     = "latest"
+}
+
 variable "guardrail_id" {
   type        = string
   description = "Bedrock guardrail ID. Created by scripts/ensure_guardrail.sh and passed in by the deploy workflow."

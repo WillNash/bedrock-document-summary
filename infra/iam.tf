@@ -278,18 +278,14 @@ resource "aws_iam_role_policy" "processing_bedrock_runtime" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      {
-        Effect   = "Allow"
-        Action   = ["bedrock:InvokeModel"]
-        Resource = ["*"]
-      },
-      {
-        Effect   = "Allow"
-        Action   = ["aws-marketplace:ViewSubscriptions", "aws-marketplace:Subscribe"]
-        Resource = ["*"]
-      },
-    ]
+    Statement = [{
+      Effect = "Allow"
+      Action = ["bedrock:InvokeModel"]
+      Resource = [
+        "arn:aws:bedrock:${local.region}::inference-profile/${var.bedrock_classifier_model_id}",
+        "arn:aws:bedrock:${local.region}::inference-profile/${var.bedrock_model_id}",
+      ]
+    }]
   })
 }
 
@@ -383,7 +379,7 @@ resource "aws_iam_role_policy" "comparator_bedrock" {
     Statement = [{
       Effect   = "Allow"
       Action   = ["bedrock:InvokeModel"]
-      Resource = ["*"]
+      Resource = ["arn:aws:bedrock:${local.region}::foundation-model/amazon.titan-embed-text-v2:0"]
     }]
   })
 }
@@ -433,7 +429,7 @@ resource "aws_iam_role_policy" "gold_comparator_bedrock" {
     Statement = [{
       Effect   = "Allow"
       Action   = ["bedrock:InvokeModel"]
-      Resource = ["*"]
+      Resource = ["arn:aws:bedrock:${local.region}::foundation-model/amazon.titan-embed-text-v2:0"]
     }]
   })
 }
@@ -744,9 +740,12 @@ resource "aws_iam_role_policy" "comparison_processing_bedrock" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect   = "Allow"
-      Action   = ["bedrock:InvokeModel"]
-      Resource = ["*"]
+      Effect = "Allow"
+      Action = ["bedrock:InvokeModel"]
+      Resource = [
+        "arn:aws:bedrock:${local.region}::foundation-model/amazon.titan-embed-text-v2:0",
+        "arn:aws:bedrock:${local.region}::inference-profile/${var.bedrock_model_id}",
+      ]
     }]
   })
 }

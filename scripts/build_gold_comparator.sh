@@ -1,17 +1,22 @@
 #!/usr/bin/env bash
 # Build, push, and deploy the gold_comparator Lambda container image.
 #
+# Tags the image with the current git commit SHA (short) and runs a targeted
+# terraform apply to update the Lambda. ECR is IMMUTABLE so each SHA tag is
+# write-once — re-running this script at the same commit is a no-op after the
+# first push (docker buildx will hit the layer cache; terraform will see no
+# change because image_uri already matches).
+#
 # FIRST-DEPLOY BOOTSTRAPPING SEQUENCE:
 #   1. terraform -chdir=infra apply -target=aws_ecr_repository.gold_comparator \
 #                                   -target=aws_ecr_lifecycle_policy.gold_comparator
 #   2. ./scripts/build_gold_comparator.sh
 #      (pushes image; exits cleanly if Lambda not yet created — see step 3)
-#   3. terraform -chdir=infra apply
+#   3. terraform -chdir=infra apply -var="gold_comparator_image_tag=<sha printed in step 2>"
 #      (creates Lambda function referencing the now-existing private image)
 #
 # SUBSEQUENT DEPLOYS (CI/CD — ECR and Lambda already exist):
-#   terraform -chdir=infra apply
-#   ./scripts/build_gold_comparator.sh
+#   ./scripts/build_gold_comparator.sh    (builds, pushes, and applies in one step)
 #
 # REQUIREMENTS:
 #   - Docker with buildx support (available on GitHub Actions ubuntu-latest)
@@ -45,24 +50,15 @@ fi
 
 ECR_URI="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}"
 
-# Resolve Lambda function name — soft fail during first-deploy bootstrapping.
-# 2>/dev/null suppresses stderr, but the setup-terraform CI wrapper can write
-# ::error:: annotations to stdout on failure, so validate the captured value.
-_RAW_FUNCTION_NAME=$(terraform -chdir="$INFRA_DIR" output -raw gold_comparator_function_name 2>/dev/null || true)
-if [[ "${_RAW_FUNCTION_NAME:-}" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-  FUNCTION_NAME="$_RAW_FUNCTION_NAME"
-else
-  FUNCTION_NAME=""
-fi
+# Use git SHA as the image tag. Override with IMAGE_TAG env var if needed
+# (e.g. IMAGE_TAG=latest for the very first bootstrapping push before any commits).
+IMAGE_TAG="${IMAGE_TAG:-$(git -C "$SCRIPT_DIR" rev-parse --short HEAD)}"
 
 # Authenticate with ECR
 aws ecr get-login-password --region "$AWS_REGION" | \
   docker login --username AWS --password-stdin "${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 
 # Build and push image in one step (arm64, --provenance=false required for Lambda compatibility).
-# --push is used instead of a separate docker push because the docker-container buildx driver
-# (used in CI) does not export to the local daemon — it must push directly to the registry.
-# GHA cache is used in CI to avoid re-downloading torch/transformers/scibert on every run.
 CACHE_FLAGS=()
 if [ -n "${GITHUB_ACTIONS:-}" ]; then
   CACHE_FLAGS=(--cache-from type=gha --cache-to type=gha,mode=max)
@@ -73,21 +69,23 @@ docker buildx build \
   --provenance=false \
   --push \
   "${CACHE_FLAGS[@]}" \
-  -t "${ECR_URI}:latest" \
+  -t "${ECR_URI}:${IMAGE_TAG}" \
   "$SCRIPT_DIR/../lambda/gold_comparator/"
 
-# First-deploy exit: Lambda not yet created — image is in ECR, run terraform apply next
-if [ -z "$FUNCTION_NAME" ]; then
-  echo "INFO: Image pushed to ECR successfully."
-  echo "      Lambda function not yet deployed. Run:"
-  echo "        terraform -chdir=infra apply"
+echo "Pushed ${ECR_URI}:${IMAGE_TAG}"
+
+# Check whether the Lambda function exists yet (first-deploy bootstrapping).
+_RAW_FUNCTION_NAME=$(terraform -chdir="$INFRA_DIR" output -raw gold_comparator_function_name 2>/dev/null || true)
+if ! [[ "${_RAW_FUNCTION_NAME:-}" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+  echo "INFO: Lambda function not yet deployed. Run:"
+  echo "  terraform -chdir=infra apply -var=\"gold_comparator_image_tag=${IMAGE_TAG}\""
   exit 0
 fi
 
-# Update Lambda to use the new image digest
-aws lambda update-function-code \
-  --function-name "$FUNCTION_NAME" \
-  --image-uri "${ECR_URI}:latest" \
-  --region "$AWS_REGION"
+# Update only the gold_comparator Lambda — avoids needing to pass the other image tag variable.
+terraform -chdir="$INFRA_DIR" apply \
+  -target=aws_lambda_function.gold_comparator \
+  -var="gold_comparator_image_tag=${IMAGE_TAG}" \
+  -auto-approve
 
-echo "Done: gold_comparator deployed ${ECR_URI}:latest"
+echo "Done: gold_comparator deployed ${ECR_URI}:${IMAGE_TAG}"

@@ -41,8 +41,9 @@ _scorer = BERTScorer(
     rescale_with_baseline=False,
 )
 # scibert's tokenizer_config.json omits model_max_length; force to actual positional limit.
-# 256 (not 512) keeps warm-Lambda inference under the 29-second API GW timeout.
-_scorer._tokenizer.model_max_length = 256
+# Step Functions timeout is 300s — use the full 512-token limit for accuracy.
+# (gold_comparator, which is behind API Gateway, keeps 256.)
+_scorer._tokenizer.model_max_length = 512
 
 
 def _read_text(bucket, key):
