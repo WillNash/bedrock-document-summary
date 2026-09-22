@@ -81,7 +81,7 @@ All four processing states (ClassifyDocument, ExtractData, ValidateData, RenderS
 - **Classification:** `bedrock-agent` client → `get_prompt()` then `bedrock-runtime` → `converse()`. Uses Claude Haiku.
 - **Extraction:** Same pattern. Forces tool use with `toolChoice={"tool": {"name": "extract_document"}}` so the response always contains a `toolUse` block. Uses Claude Sonnet.
 - **Model IDs must use a geo or global inference profile prefix** (`us.`, `eu.`, `au.`, `jp.`, `global.`). Bare model IDs (`anthropic.claude-*`) fail at runtime.
-- Bedrock Prompt Management versions are pinned: `CLASSIFIER_PROMPT_VERSION` and `PROMPT_VERSIONS_JSON` env vars are set from `aws_bedrock_prompt_version.*.version` in Terraform.
+- **Bedrock Prompt Management versions:** The AWS Terraform provider does not support `aws_bedrockagent_prompt_version`. Prompt versions are managed out-of-band like guardrails: run `scripts/publish_prompt_versions.sh` (which calls `aws bedrock-agent create-prompt-version` for each prompt) then pass the printed `TF_VAR_*` exports to `terraform apply`. `CLASSIFIER_PROMPT_VERSION` and `PROMPT_VERSIONS_JSON` Lambda env vars are set from `var.classifier_prompt_version` and `var.extraction_prompt_versions_json`. Both default to `"DRAFT"` — must be set explicitly in CI to pin live traffic to an immutable version.
 - **Bedrock guardrail workaround:** The AWS Terraform provider cannot manage the guardrail resource reliably. The deploy workflow removes it from state (`terraform state rm`) before `apply`, then `ensure_guardrail.sh` recreates/updates it via AWS CLI. Don't manage the guardrail resource directly in Terraform.
 
 ### Terraform structure (`infra/`)

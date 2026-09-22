@@ -19,6 +19,9 @@ locals {
     "psych_eval",
   ])
 
+  # try() handles empty string or malformed JSON gracefully — falls back to DRAFT for each type.
+  extraction_prompt_versions = try(jsondecode(var.extraction_prompt_versions_json), {})
+
   xray_actions = [
     "xray:PutTraceSegments",
     "xray:PutTelemetryRecords",

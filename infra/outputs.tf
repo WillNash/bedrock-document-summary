@@ -92,3 +92,13 @@ output "gold_comparator_function_name" {
   description = "Lambda function name for gold_comparator — used by build_gold_comparator.sh"
   value       = aws_lambda_function.gold_comparator.function_name
 }
+
+output "classifier_prompt_arn" {
+  description = "ARN of the classifier Bedrock prompt — used by scripts/publish_prompt_versions.sh"
+  value       = aws_bedrockagent_prompt.classifier.arn
+}
+
+output "extraction_prompt_arns_json" {
+  description = "JSON map of extraction doc types to Bedrock prompt ARNs — used by scripts/publish_prompt_versions.sh"
+  value       = jsonencode({ for k, p in aws_bedrockagent_prompt.extraction : k => p.arn })
+}

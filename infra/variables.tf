@@ -112,6 +112,18 @@ variable "gold_comparator_image_tag" {
   default     = "latest"
 }
 
+variable "classifier_prompt_version" {
+  type        = string
+  description = "Pinned version number for the classifier Bedrock prompt. Set by scripts/publish_prompt_versions.sh before terraform apply. Defaults to DRAFT (mutable staging slot — unsafe for production)."
+  default     = "DRAFT"
+}
+
+variable "extraction_prompt_versions_json" {
+  type        = string
+  description = "JSON object mapping extraction doc types to pinned prompt version numbers, e.g. {\"lab_result\":\"2\",\"doctors_notes\":\"2\",...}. Set by scripts/publish_prompt_versions.sh before terraform apply. Empty string defaults all types to DRAFT."
+  default     = ""
+}
+
 variable "guardrail_id" {
   type        = string
   description = "Bedrock guardrail ID. Created by scripts/ensure_guardrail.sh and passed in by the deploy workflow."
