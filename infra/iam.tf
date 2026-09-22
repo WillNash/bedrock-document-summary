@@ -145,7 +145,7 @@ resource "aws_iam_role_policy" "pipeline_starter_dynamodb" {
     Version = "2012-10-17"
     Statement = [{
       Effect   = "Allow"
-      Action   = ["dynamodb:UpdateItem"]
+      Action   = ["dynamodb:GetItem", "dynamodb:UpdateItem"]
       Resource = aws_dynamodb_table.jobs.arn
     }]
   })
@@ -207,15 +207,32 @@ resource "aws_iam_role_policy" "processing_logs" {
 }
 
 resource "aws_iam_role_policy" "processing_dynamodb" {
-  name = "dynamodb-jobs"
+  name = "dynamodb-jobs-and-experiments"
+  role = aws_iam_role.processing.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = ["dynamodb:UpdateItem"]
+      Resource = [
+        aws_dynamodb_table.jobs.arn,
+        aws_dynamodb_table.experiments.arn,
+      ]
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "processing_sfn_comparison" {
+  name = "sfn-start-comparison"
   role = aws_iam_role.processing.id
 
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
       Effect   = "Allow"
-      Action   = ["dynamodb:UpdateItem"]
-      Resource = aws_dynamodb_table.jobs.arn
+      Action   = ["states:StartExecution"]
+      Resource = aws_sfn_state_machine.comparison.arn
     }]
   })
 }
@@ -444,15 +461,32 @@ resource "aws_iam_role_policy" "fail_handler_logs" {
 }
 
 resource "aws_iam_role_policy" "fail_handler_dynamodb" {
-  name = "dynamodb-jobs"
+  name = "dynamodb-jobs-and-experiments"
+  role = aws_iam_role.fail_handler.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = ["dynamodb:UpdateItem"]
+      Resource = [
+        aws_dynamodb_table.jobs.arn,
+        aws_dynamodb_table.experiments.arn,
+      ]
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "fail_handler_sfn_comparison" {
+  name = "sfn-start-comparison"
   role = aws_iam_role.fail_handler.id
 
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
       Effect   = "Allow"
-      Action   = ["dynamodb:UpdateItem"]
-      Resource = aws_dynamodb_table.jobs.arn
+      Action   = ["states:StartExecution"]
+      Resource = aws_sfn_state_machine.comparison.arn
     }]
   })
 }
@@ -532,3 +566,297 @@ resource "aws_iam_role_policy" "sfn_logs" {
     }]
   })
 }
+
+# ── experiment_starter role ──────────────────────────────────────────────────
+
+resource "aws_iam_role" "experiment_starter" {
+  name               = "${local.name_prefix}-experiment-starter-role"
+  assume_role_policy = data.aws_iam_policy_document.lambda_trust.json
+  tags               = local.common_tags
+}
+
+resource "aws_iam_role_policy" "experiment_starter_logs" {
+  name = "cloudwatch-logs"
+  role = aws_iam_role.experiment_starter.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+      Resource = "arn:aws:logs:*:${local.account_id}:log-group:/aws/lambda/${local.name_prefix}-experiment-starter:*"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "experiment_starter_dynamodb" {
+  name = "dynamodb-jobs-and-experiments"
+  role = aws_iam_role.experiment_starter.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = ["dynamodb:PutItem"]
+      Resource = [
+        aws_dynamodb_table.jobs.arn,
+        aws_dynamodb_table.experiments.arn,
+      ]
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "experiment_starter_s3" {
+  name = "s3-access"
+  role = aws_iam_role.experiment_starter.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["s3:GetObject", "s3:HeadObject", "s3:CopyObject", "s3:PutObject"]
+        Resource = "${aws_s3_bucket.uploads.arn}/*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["s3:PutObject"]
+        Resource = "${aws_s3_bucket.summaries.arn}/*"
+      },
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "experiment_starter_kms" {
+  name = "kms-phi"
+  role = aws_iam_role.experiment_starter.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["kms:Decrypt", "kms:GenerateDataKey"]
+      Resource = aws_kms_key.phi.arn
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "experiment_starter_xray" {
+  name = "xray"
+  role = aws_iam_role.experiment_starter.id
+
+  policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [{ Effect = "Allow", Action = local.xray_actions, Resource = "*" }]
+  })
+}
+
+# ── comparison_processing role (summary_collector, variance_scorer, gold_scorer,
+#    report_generator, report_writer) ─────────────────────────────────────────
+
+resource "aws_iam_role" "comparison_processing" {
+  name               = "${local.name_prefix}-comparison-processing-role"
+  assume_role_policy = data.aws_iam_policy_document.lambda_trust.json
+  tags               = local.common_tags
+}
+
+resource "aws_iam_role_policy" "comparison_processing_logs" {
+  name = "cloudwatch-logs"
+  role = aws_iam_role.comparison_processing.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+      Resource = [
+        "arn:aws:logs:*:${local.account_id}:log-group:/aws/lambda/${local.name_prefix}-summary-collector:*",
+        "arn:aws:logs:*:${local.account_id}:log-group:/aws/lambda/${local.name_prefix}-variance-scorer:*",
+        "arn:aws:logs:*:${local.account_id}:log-group:/aws/lambda/${local.name_prefix}-gold-scorer:*",
+        "arn:aws:logs:*:${local.account_id}:log-group:/aws/lambda/${local.name_prefix}-report-generator:*",
+        "arn:aws:logs:*:${local.account_id}:log-group:/aws/lambda/${local.name_prefix}-report-writer:*",
+      ]
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "comparison_processing_s3" {
+  name = "s3-access"
+  role = aws_iam_role.comparison_processing.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["s3:GetObject"]
+        Resource = "${aws_s3_bucket.summaries.arn}/experiments/*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["s3:PutObject"]
+        Resource = "${aws_s3_bucket.summaries.arn}/experiments/*/report/*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["s3:ListBucket"]
+        Resource = aws_s3_bucket.summaries.arn
+        Condition = {
+          StringLike = { "s3:prefix" = ["experiments/*/runs/*"] }
+        }
+      },
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "comparison_processing_dynamodb" {
+  name = "dynamodb-experiments"
+  role = aws_iam_role.comparison_processing.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["dynamodb:GetItem", "dynamodb:UpdateItem"]
+      Resource = aws_dynamodb_table.experiments.arn
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "comparison_processing_bedrock" {
+  name = "bedrock-invoke"
+  role = aws_iam_role.comparison_processing.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["bedrock:InvokeModel"]
+      Resource = ["*"]
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "comparison_processing_kms" {
+  name = "kms-phi"
+  role = aws_iam_role.comparison_processing.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["kms:Decrypt", "kms:GenerateDataKey"]
+      Resource = aws_kms_key.phi.arn
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "comparison_processing_xray" {
+  name = "xray"
+  role = aws_iam_role.comparison_processing.id
+
+  policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [{ Effect = "Allow", Action = local.xray_actions, Resource = "*" }]
+  })
+}
+
+# ── comparison_fail_handler role ─────────────────────────────────────────────
+
+resource "aws_iam_role" "comparison_fail_handler" {
+  name               = "${local.name_prefix}-comparison-fail-handler-role"
+  assume_role_policy = data.aws_iam_policy_document.lambda_trust.json
+  tags               = local.common_tags
+}
+
+resource "aws_iam_role_policy" "comparison_fail_handler_logs" {
+  name = "cloudwatch-logs"
+  role = aws_iam_role.comparison_fail_handler.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+      Resource = "arn:aws:logs:*:${local.account_id}:log-group:/aws/lambda/${local.name_prefix}-comparison-fail-handler:*"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "comparison_fail_handler_dynamodb" {
+  name = "dynamodb-experiments"
+  role = aws_iam_role.comparison_fail_handler.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["dynamodb:UpdateItem"]
+      Resource = aws_dynamodb_table.experiments.arn
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "comparison_fail_handler_xray" {
+  name = "xray"
+  role = aws_iam_role.comparison_fail_handler.id
+
+  policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [{ Effect = "Allow", Action = local.xray_actions, Resource = "*" }]
+  })
+}
+
+# ── sfn_comparison role ───────────────────────────────────────────────────────
+
+resource "aws_iam_role" "sfn_comparison" {
+  name               = "${local.name_prefix}-sfn-comparison-role"
+  assume_role_policy = data.aws_iam_policy_document.sfn_trust.json
+  tags               = local.common_tags
+}
+
+resource "aws_iam_role_policy" "sfn_comparison_invoke_lambdas" {
+  name = "invoke-lambdas"
+  role = aws_iam_role.sfn_comparison.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = ["lambda:InvokeFunction"]
+      Resource = [
+        aws_lambda_function.summary_collector.arn,
+        aws_lambda_function.variance_scorer.arn,
+        aws_lambda_function.gold_scorer.arn,
+        aws_lambda_function.report_generator.arn,
+        aws_lambda_function.report_writer.arn,
+        aws_lambda_function.comparison_fail_handler.arn,
+      ]
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "sfn_comparison_logs" {
+  name = "cloudwatch-logs"
+  role = aws_iam_role.sfn_comparison.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "logs:CreateLogDelivery",
+        "logs:PutLogEvents",
+        "logs:GetLogDelivery",
+        "logs:UpdateLogDelivery",
+        "logs:DeleteLogDelivery",
+        "logs:ListLogDeliveries",
+        "logs:PutResourcePolicy",
+        "logs:DescribeResourcePolicies",
+        "logs:DescribeLogGroups",
+      ]
+      Resource = "*"
+    }]
+  })
+}
+

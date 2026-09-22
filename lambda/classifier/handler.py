@@ -39,12 +39,16 @@ def lambda_handler(event, context):
 
     system_prompt = _get_prompt_text()
     model_id = os.environ['BEDROCK_CLASSIFIER_MODEL_ID']
+    prompt_arn = os.environ['CLASSIFIER_PROMPT_ARN']
+    prompt_version = os.environ['CLASSIFIER_PROMPT_VERSION']
 
     guardrail_config = {}
-    if os.environ.get('GUARDRAIL_ID') and os.environ.get('GUARDRAIL_VERSION'):
+    guardrail_id = os.environ.get('GUARDRAIL_ID', '')
+    guardrail_version = os.environ.get('GUARDRAIL_VERSION', '')
+    if guardrail_id and guardrail_version:
         guardrail_config = {
-            'guardrailIdentifier': os.environ['GUARDRAIL_ID'],
-            'guardrailVersion': os.environ['GUARDRAIL_VERSION'],
+            'guardrailIdentifier': guardrail_id,
+            'guardrailVersion': guardrail_version,
             'trace': 'disabled',
         }
 
@@ -75,6 +79,10 @@ def lambda_handler(event, context):
         'usage_stats': {
             'classifier': {
                 'model': model_id,
+                'prompt_arn': prompt_arn,
+                'prompt_version': prompt_version,
+                'guardrail_id': guardrail_id,
+                'guardrail_version': guardrail_version,
                 'input_tokens': usage.get('inputTokens', 0),
                 'output_tokens': usage.get('outputTokens', 0),
             },

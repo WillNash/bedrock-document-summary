@@ -63,6 +63,26 @@ output "pipeline_starter_dlq_url" {
   value       = aws_sqs_queue.pipeline_starter_dlq.url
 }
 
+output "experiments_table_name" {
+  description = "DynamoDB experiments table name"
+  value       = aws_dynamodb_table.experiments.name
+}
+
+output "comparison_state_machine_arn" {
+  description = "Step Functions Standard state machine ARN for experiment comparison"
+  value       = aws_sfn_state_machine.comparison.arn
+}
+
+output "gold_scorer_ecr_repository_name" {
+  description = "ECR repository name for the gold_scorer container image"
+  value       = aws_ecr_repository.gold_scorer.name
+}
+
+output "gold_scorer_function_name" {
+  description = "Lambda function name for gold_scorer — used by build_gold_scorer.sh"
+  value       = aws_lambda_function.gold_scorer.function_name
+}
+
 output "gold_comparator_ecr_repository_name" {
   description = "ECR repository name for the gold_comparator container image"
   value       = aws_ecr_repository.gold_comparator.name

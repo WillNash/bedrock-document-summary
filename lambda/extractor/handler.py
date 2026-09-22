@@ -69,6 +69,9 @@ def lambda_handler(event, context):
     schema = _load_schema(doc_type)
     system_prompt = _get_prompt_text(doc_type)
     model_id = os.environ['BEDROCK_MODEL_ID']
+    arns, versions = _get_prompt_config()
+    prompt_arn = arns[doc_type]
+    prompt_version = versions[doc_type]
 
     tool_def = {
         'toolSpec': {
@@ -125,6 +128,8 @@ def lambda_handler(event, context):
             **event.get('usage_stats', {}),
             'extractor': {
                 'model': model_id,
+                'prompt_arn': prompt_arn,
+                'prompt_version': prompt_version,
                 'input_tokens': usage.get('inputTokens', 0),
                 'output_tokens': usage.get('outputTokens', 0),
             },
