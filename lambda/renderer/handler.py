@@ -106,7 +106,7 @@ def _record_experiment_success(experiment_id, summaries_bucket):
     expected_n = int(attrs['expected_n'])
     successful_n = int(attrs.get('successful_n', 0))
 
-    if completed_n == expected_n:
+    if completed_n >= expected_n:
         _maybe_start_comparison(experiment_id, summaries_bucket, expected_n, successful_n)
 
 

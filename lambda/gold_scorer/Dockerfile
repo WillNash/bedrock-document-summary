@@ -5,7 +5,7 @@ ENV TRANSFORMERS_CACHE=/var/task/hf_cache \
     TOKENIZERS_PARALLELISM=false \
     TRANSFORMERS_OFFLINE=1
 
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir torch
 
 RUN pip install --no-cache-dir \
     numpy==1.26.4 \

@@ -234,6 +234,20 @@ class TestRendererExperimentOutputs:
 
         mock_sfn.start_execution.assert_not_called()
 
+    def test_comparison_sm_started_when_completed_n_exceeds_expected(self):
+        # completed_n can exceed expected_n when fail_handler double-increments on the
+        # final run (renderer increments, then StartExecution fails, then fail_handler
+        # also increments). The >= guard ensures the SM is still triggered.
+        mock_ddb, mock_table = self._make_ddb_mock(completed_n=6, expected_n=5, successful_n=5)
+
+        with mock.patch.object(renderer_handler, 's3_client'), \
+             mock.patch.object(renderer_handler, 'dynamodb', mock_ddb), \
+             mock.patch.object(renderer_handler, 'sfn_client') as mock_sfn:
+
+            renderer_handler.lambda_handler(EXPERIMENT_EVENT, None)
+
+        mock_sfn.start_execution.assert_called_once()
+
     def test_non_experiment_job_skips_experiment_path(self):
         with mock.patch.object(renderer_handler, 's3_client') as mock_s3, \
              mock.patch.object(renderer_handler, 'dynamodb') as mock_ddb, \

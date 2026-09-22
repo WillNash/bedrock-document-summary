@@ -29,6 +29,11 @@ resource "aws_bedrockagent_prompt" "classifier" {
   tags            = local.common_tags
 }
 
+resource "aws_bedrockagent_prompt_version" "classifier" {
+  prompt_arn  = aws_bedrockagent_prompt.classifier.arn
+  description = "Pinned version managed by Terraform — do not use DRAFT in Lambda env vars"
+}
+
 resource "aws_bedrockagent_prompt" "extraction" {
   for_each = local.extraction_doc_types
   name     = "${local.name_prefix}-${replace(each.key, "_", "-")}"
@@ -54,4 +59,10 @@ resource "aws_bedrockagent_prompt" "extraction" {
 
   default_variant = "default"
   tags            = local.common_tags
+}
+
+resource "aws_bedrockagent_prompt_version" "extraction" {
+  for_each    = local.extraction_doc_types
+  prompt_arn  = aws_bedrockagent_prompt.extraction[each.key].arn
+  description = "Pinned version managed by Terraform — do not use DRAFT in Lambda env vars"
 }

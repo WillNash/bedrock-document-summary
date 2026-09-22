@@ -157,6 +157,22 @@ class TestExperimentTracking:
 
         mock_sfn.start_execution.assert_not_called()
 
+    def test_comparison_sm_started_when_completed_n_exceeds_expected(self):
+        # completed_n can exceed expected_n when renderer already incremented it and
+        # fail_handler increments again due to a renderer exception after the DynamoDB
+        # write. The >= guard ensures the experiment is not permanently stuck.
+        mock_ddb, mock_table = self._make_ddb_mock(completed_n=6, expected_n=5, successful_n=4)
+
+        with mock.patch.object(handler, 'dynamodb', mock_ddb), \
+             mock.patch.object(handler, 'sfn_client') as mock_sfn:
+
+            handler.lambda_handler(
+                {'job_id': 'job-9', 'experiment_id': 'exp-004', 'run_number': 5},
+                None,
+            )
+
+        mock_sfn.start_execution.assert_called_once()
+
     def test_no_experiment_skips_experiment_tracking(self):
         with mock.patch.object(handler, 'dynamodb') as mock_ddb, \
              mock.patch.object(handler, 'sfn_client') as mock_sfn:

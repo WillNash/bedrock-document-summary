@@ -93,7 +93,7 @@ def lambda_handler(event, context):
             'expected_n': expected_n,
         }))
 
-        if completed_n == expected_n:
+        if completed_n >= expected_n:
             _maybe_start_comparison(experiment_id, summaries_bucket, expected_n, successful_n)
 
     return {'job_id': job_id, 'status': 'FAILED'}
