@@ -9,17 +9,14 @@ RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/wh
 
 RUN pip install --no-cache-dir \
     numpy==1.26.4 \
+    pillow==10.4.0 \
+    matplotlib==3.9.2 \
     tokenizers==0.13.3 \
     huggingface-hub==0.19.4 \
     transformers==4.33.3 \
-    pandas \
-    tqdm \
-    requests
+    bert-score==0.3.13
 
-# Install bert-score without pulling in its optional plotting deps (matplotlib -> pillow)
-RUN pip install --no-cache-dir --no-deps bert-score==0.3.13
-
-RUN python -c "from bert_score import BERTScorer; BERTScorer(model_type='allenai/scibert_scivocab_uncased', num_layers=8, device='cpu')"
+RUN TRANSFORMERS_OFFLINE=0 python -c "from bert_score import BERTScorer; BERTScorer(model_type='allenai/scibert_scivocab_uncased', num_layers=8, device='cpu')"
 
 COPY handler.py ${LAMBDA_TASK_ROOT}/
 
