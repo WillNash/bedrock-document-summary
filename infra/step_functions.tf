@@ -28,11 +28,11 @@ resource "aws_sfn_state_machine" "comparison" {
   role_arn = aws_iam_role.sfn_comparison.arn
 
   definition = templatefile("${path.module}/comparison_sm.json.tpl", {
-    summary_collector_lambda_arn    = aws_lambda_function.summary_collector.arn
-    variance_scorer_lambda_arn      = aws_lambda_function.variance_scorer.arn
-    gold_scorer_lambda_arn          = aws_lambda_function.gold_scorer.arn
-    report_generator_lambda_arn     = aws_lambda_function.report_generator.arn
-    report_writer_lambda_arn        = aws_lambda_function.report_writer.arn
+    summary_collector_lambda_arn       = aws_lambda_function.summary_collector.arn
+    variance_scorer_lambda_arn         = aws_lambda_function.variance_scorer.arn
+    gold_scorer_lambda_arn             = aws_lambda_function.gold_scorer.arn
+    report_generator_lambda_arn        = aws_lambda_function.report_generator.arn
+    report_writer_lambda_arn           = aws_lambda_function.report_writer.arn
     comparison_fail_handler_lambda_arn = aws_lambda_function.comparison_fail_handler.arn
   })
 
