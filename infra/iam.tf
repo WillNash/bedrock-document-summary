@@ -165,6 +165,20 @@ resource "aws_iam_role_policy" "pipeline_starter_sfn" {
   })
 }
 
+resource "aws_iam_role_policy" "pipeline_starter_kms" {
+  name = "kms-phi"
+  role = aws_iam_role.pipeline_starter.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["kms:Decrypt", "kms:GenerateDataKey"]
+      Resource = aws_kms_key.phi.arn
+    }]
+  })
+}
+
 resource "aws_iam_role_policy" "pipeline_starter_xray" {
   name = "xray"
   role = aws_iam_role.pipeline_starter.id
