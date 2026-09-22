@@ -3,6 +3,12 @@ locals {
   account_id  = data.aws_caller_identity.current.account_id
   region      = data.aws_region.current.name
 
+  # Strip geo prefix (us., eu., au., jp., global.) to obtain the bare foundation-model IDs
+  # needed for IAM resource ARNs — cross-region inference profiles check both the
+  # inference-profile ARN and the underlying foundation-model ARN at invoke time.
+  classifier_foundation_model_id = replace(var.bedrock_classifier_model_id, "/^(us|eu|au|jp|global)\\./", "")
+  extractor_foundation_model_id  = replace(var.bedrock_model_id, "/^(us|eu|au|jp|global)\\./", "")
+
   common_tags = merge(var.tags, {
     Project     = var.project_name
     Environment = var.environment

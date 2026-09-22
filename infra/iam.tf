@@ -282,12 +282,15 @@ resource "aws_iam_role_policy" "processing_bedrock_runtime" {
       Effect = "Allow"
       Action = ["bedrock:InvokeModel"]
       Resource = [
-        # System-defined (AWS-managed) inference profile ARN — no account segment
+        # System-defined inference profile ARN (no account segment)
         "arn:aws:bedrock:${local.region}::inference-profile/${var.bedrock_classifier_model_id}",
         "arn:aws:bedrock:${local.region}::inference-profile/${var.bedrock_model_id}",
-        # Cross-region inference profile ARN — Bedrock creates these in the caller's account
+        # Cross-region inference profile ARN (account-scoped)
         "arn:aws:bedrock:${local.region}:${local.account_id}:inference-profile/${var.bedrock_classifier_model_id}",
         "arn:aws:bedrock:${local.region}:${local.account_id}:inference-profile/${var.bedrock_model_id}",
+        # Underlying foundation-model ARN — Bedrock also checks this when routing via a CRP
+        "arn:aws:bedrock:${local.region}::foundation-model/${local.classifier_foundation_model_id}",
+        "arn:aws:bedrock:${local.region}::foundation-model/${local.extractor_foundation_model_id}",
       ]
     }]
   })
@@ -750,6 +753,7 @@ resource "aws_iam_role_policy" "comparison_processing_bedrock" {
         "arn:aws:bedrock:${local.region}::foundation-model/amazon.titan-embed-text-v2:0",
         "arn:aws:bedrock:${local.region}::inference-profile/${var.bedrock_model_id}",
         "arn:aws:bedrock:${local.region}:${local.account_id}:inference-profile/${var.bedrock_model_id}",
+        "arn:aws:bedrock:${local.region}::foundation-model/${local.extractor_foundation_model_id}",
       ]
     }]
   })
