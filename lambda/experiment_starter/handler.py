@@ -98,8 +98,6 @@ def lambda_handler(event, context):
         'source_document_key': source_document_key,
         'gold_key': gold_key,
     }
-    if 'temperature' in experiment_config:
-        experiment_config['temperature'] = Decimal(str(experiment_config['temperature']))
 
     s3_client.put_object(
         Bucket=summaries_bucket,
@@ -113,6 +111,9 @@ def lambda_handler(event, context):
         ContentType='application/json',
     )
 
+    # DynamoDB rejects Python floats — convert any float values in config to Decimal
+    ddb_config = {k: Decimal(str(v)) if isinstance(v, float) else v for k, v in experiment_config.items()}
+
     experiments_table = dynamodb.Table(experiments_table_name)
     experiments_table.put_item(Item={
         'experiment_id': experiment_id,
@@ -121,7 +122,7 @@ def lambda_handler(event, context):
         'successful_n': Decimal('0'),
         'failed_n': Decimal('0'),
         'status': 'PENDING',
-        'config': experiment_config,
+        'config': ddb_config,
         'created_at': created_at,
     })
 
