@@ -45,24 +45,31 @@ resource "aws_iam_role_policy" "api_logs" {
 }
 
 resource "aws_iam_role_policy" "api_dynamodb" {
-  name = "dynamodb-jobs"
+  name = "dynamodb-jobs-and-experiments"
   role = aws_iam_role.api.id
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = [
-        "dynamodb:PutItem",
-        "dynamodb:GetItem",
-        "dynamodb:UpdateItem",
-        "dynamodb:Query",
-      ]
-      Resource = [
-        aws_dynamodb_table.jobs.arn,
-        "${aws_dynamodb_table.jobs.arn}/index/*",
-      ]
-    }]
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:PutItem",
+          "dynamodb:GetItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:Query",
+        ]
+        Resource = [
+          aws_dynamodb_table.jobs.arn,
+          "${aws_dynamodb_table.jobs.arn}/index/*",
+        ]
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["dynamodb:GetItem"]
+        Resource = aws_dynamodb_table.experiments.arn
+      },
+    ]
   })
 }
 

@@ -123,57 +123,17 @@ function showGold() {
 function setRunBtnEnabled() {
   const n = parseInt(document.getElementById('run-count').value, 10);
   document.getElementById('run-btn').disabled =
-    !currentDocFile || !currentRefFile || !(n >= 1 && n <= 200) || isRunning;
-}
-
-function buildRunGrid(n) {
-  const grid = document.getElementById('run-grid');
-  grid.innerHTML = '';
-  for (let i = 1; i <= n; i++) {
-    const tile = document.createElement('div');
-    tile.className = 'run-tile queued';
-    tile.id = `run-tile-${i}`;
-    tile.innerHTML = `<span class="run-num">Run ${i}</span><span class="run-status">queued</span>`;
-    grid.appendChild(tile);
-  }
-  const log = document.getElementById('error-log');
-  log.innerHTML = '';
-  log.classList.add('hidden');
-  document.getElementById('progress-panel').classList.remove('hidden');
-}
-
-function logRunError(num, message) {
-  const log = document.getElementById('error-log');
-  log.classList.remove('hidden');
-  const entry = document.createElement('p');
-  entry.className = 'run-error-entry';
-  entry.textContent = `Run ${String(num).padStart(2, '0')} failed: ${message}`;
-  log.appendChild(entry);
-}
-
-const STATUS_CLASS = {
-  queued: 'queued', uploading: 'uploading',
-  pending: 'pending', running: 'running', processing: 'processing',
-  completed: 'done', done: 'done', failed: 'failed',
-};
-
-function updateRunTile(num, status) {
-  const tile = document.getElementById(`run-tile-${num}`);
-  if (!tile) return;
-  const cls = STATUS_CLASS[status] || 'processing';
-  tile.className = `run-tile ${cls}`;
-  tile.querySelector('.run-status').textContent = cls;
+    !currentDocFile || !currentRefFile || !(n >= 2 && n <= 100) || isRunning;
 }
 
 function setHeader(text) {
   document.getElementById('progress-header').textContent = text;
+  document.getElementById('progress-panel').classList.remove('hidden');
 }
 
-// ── Job orchestration ─────────────────────────────────────────────────────────
+// ── Upload ────────────────────────────────────────────────────────────────────
 
-async function submitJob(file, runNum) {
-  updateRunTile(runNum, 'uploading');
-
+async function uploadDocument(file) {
   if (!await ensureValidToken()) throw new Error('auth');
 
   const presignRes = await fetch(`${API_URL}/presign`, {
@@ -194,21 +154,51 @@ async function submitJob(file, runNum) {
   formData.append('file', file);
 
   const uploadRes = await fetch(presign_url, { method: 'POST', body: formData });
-  if (!uploadRes.ok && uploadRes.status !== 204) throw new Error(`upload failed (run ${runNum})`);
+  if (!uploadRes.ok && uploadRes.status !== 204) throw new Error('Document upload failed');
 
-  updateRunTile(runNum, 'pending');
-  return job_id;
+  // The S3 key the experiment_starter will copy N times.
+  // Note: this upload also fires pipeline_starter and runs one extra pipeline
+  // pass (the "seed" run). That job has no experiment context and its output
+  // is not included in the experiment results.
+  return `uploads/${job_id}/${file.name}`;
 }
 
-async function pollUntilDone(job_id, runNum) {
-  for (let tick = 0; tick < 120; tick++) {
-    await new Promise(r => setTimeout(r, 5000));
+// ── Experiment ────────────────────────────────────────────────────────────────
+
+async function startExperiment(sourceDocumentKey, expectedN, goldText) {
+  if (!await ensureValidToken()) throw new Error('auth');
+
+  const experimentId = crypto.randomUUID();
+
+  const res = await fetch(`${API_URL}/experiments`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${idToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      experiment_id: experimentId,
+      expected_n: expectedN,
+      source_document_key: sourceDocumentKey,
+      gold_text: goldText,
+    }),
+  });
+  if (res.status === 401) throw new Error('auth');
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(`experiments HTTP ${res.status}: ${detail.error || 'unknown error'}`);
+  }
+
+  return experimentId;
+}
+
+async function pollExperiment(experimentId, expectedN) {
+  // 180 ticks × 10s = 30 minutes max (covers N pipeline runs + comparison SM)
+  for (let tick = 0; tick < 180; tick++) {
+    await new Promise(r => setTimeout(r, 10000));
 
     if (!await ensureValidToken()) throw new Error('auth');
 
     let res;
     try {
-      res = await fetch(`${API_URL}/jobs/${job_id}`, {
+      res = await fetch(`${API_URL}/experiments/${experimentId}`, {
         headers: { 'Authorization': `Bearer ${idToken}` },
       });
     } catch { continue; }
@@ -217,44 +207,18 @@ async function pollUntilDone(job_id, runNum) {
     if (!res.ok) continue;
 
     const data = await res.json();
+    const completedN = data.completed_n ?? 0;
+    setHeader(`Runs complete: ${completedN} / ${expectedN} — comparing…`);
 
-    if (data.status === 'COMPLETED') {
-      if (!await ensureValidToken()) throw new Error('auth');
-      const sumRes = await fetch(`${API_URL}/summaries/${job_id}`, {
-        headers: { 'Authorization': `Bearer ${idToken}` },
-      });
-      if (!sumRes.ok) throw new Error(`summary unavailable (run ${runNum})`);
-      const payload = await sumRes.json();
-      return { summary: payload.summary, usage: payload.usage || {} };
+    if (data.status === 'COMPLETED') return data;
+    if (data.status === 'COMPARISON_FAILED') {
+      throw new Error(data.error_message || 'Comparison pipeline failed');
     }
-
-    if (data.status === 'FAILED') throw new Error(data.error_message || `pipeline failed (run ${runNum})`);
-
-    updateRunTile(runNum, data.status.toLowerCase());
   }
-  throw new Error(`timed out after 10 min (run ${runNum})`);
+  throw new Error('Timed out after 30 minutes');
 }
 
-// ── Gold comparison ───────────────────────────────────────────────────────────
-
-async function runGoldComparison(summaries, referenceText, attempt = 0) {
-  if (!await ensureValidToken()) throw new Error('auth');
-  const res = await fetch(`${API_URL}/gold-compare`, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${idToken}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ texts: summaries, reference: referenceText }),
-  });
-  if (res.status === 401) throw new Error('auth');
-  if (res.status === 503 && attempt === 0) {
-    // Lambda cold start: image pull + scibert model load can exceed API Gateway's 29s limit.
-    // Lambda continues initialising in the background — retry after 60s.
-    setHeader('BERTScore model is warming up (cold start) — retrying in 60 seconds…');
-    await new Promise(r => setTimeout(r, 60000));
-    return runGoldComparison(summaries, referenceText, 1);
-  }
-  if (!res.ok) throw new Error(`gold-compare HTTP ${res.status}`);
-  return res.json();
-}
+// ── Results display ───────────────────────────────────────────────────────────
 
 function _scoreCellClass(val) {
   if (val >= 0.8) return 'high';
@@ -266,12 +230,12 @@ function _fmt(n) {
   return typeof n === 'number' ? n.toFixed(3) : '—';
 }
 
-function showGoldPanel(comparison, succeededCount) {
+function showGoldPanel(goldResults, successfulN) {
   const panel = document.getElementById('comparison-panel');
   panel.classList.remove('hidden');
 
   document.getElementById('comparison-run-count').textContent =
-    `${succeededCount} run${succeededCount !== 1 ? 's' : ''} scored`;
+    `${successfulN} run${successfulN !== 1 ? 's' : ''} scored`;
 
   const metricsEl = document.getElementById('comparison-metrics');
   metricsEl.innerHTML = '';
@@ -282,7 +246,8 @@ function showGoldPanel(comparison, succeededCount) {
   ];
 
   for (const { key, title } of metrics) {
-    const s = comparison[key];
+    const s = goldResults[key];
+    if (!s) continue;
     const card = document.createElement('div');
     card.className = 'metric-card';
     card.innerHTML = `
@@ -311,9 +276,12 @@ function showGoldPanel(comparison, succeededCount) {
   const tableEl = document.getElementById('score-table');
   tableEl.innerHTML = '';
 
-  const embScores = comparison.embedding_cosine.scores;
-  const bertScores = comparison.bertscore_f1.scores;
-  const n = embScores.length;
+  const embData = goldResults.embedding_cosine;
+  const bertData = goldResults.bertscore_f1;
+  if (!embData || !bertData) return;
+
+  const runNumbers = embData.run_numbers || embData.scores.map((_, i) => i + 1);
+  const n = runNumbers.length;
 
   const table = document.createElement('table');
   table.className = 'sim-matrix';
@@ -333,17 +301,17 @@ function showGoldPanel(comparison, succeededCount) {
     const tr = document.createElement('tr');
 
     const runTh = document.createElement('th');
-    runTh.textContent = `R${String(i + 1).padStart(2, '0')}`;
+    runTh.textContent = `R${String(runNumbers[i]).padStart(2, '0')}`;
     tr.appendChild(runTh);
 
     const embTd = document.createElement('td');
-    embTd.className = _scoreCellClass(embScores[i]);
-    embTd.textContent = embScores[i].toFixed(3);
+    embTd.className = _scoreCellClass(embData.scores[i]);
+    embTd.textContent = embData.scores[i].toFixed(3);
     tr.appendChild(embTd);
 
     const bertTd = document.createElement('td');
-    bertTd.className = _scoreCellClass(bertScores[i]);
-    bertTd.textContent = bertScores[i].toFixed(3);
+    bertTd.className = _scoreCellClass(bertData.scores[i]);
+    bertTd.textContent = bertData.scores[i].toFixed(3);
     tr.appendChild(bertTd);
 
     tbody.appendChild(tr);
@@ -354,123 +322,88 @@ function showGoldPanel(comparison, succeededCount) {
 
 // ── Report builders ───────────────────────────────────────────────────────────
 
-function buildGoldReport(docName, timestamp, succeededCount, comparison, referenceText) {
-  const e = comparison.embedding_cosine;
-  const r = comparison.bertscore_f1;
+function buildTextReport(docName, timestamp, experimentResult) {
+  const report = experimentResult.report || {};
+  const gold = report.gold_results || {};
+  const variance = report.variance_results || {};
   const f = v => (typeof v === 'number' ? v.toFixed(4) : '—');
 
-  const refPreview = referenceText.length > 80
-    ? referenceText.slice(0, 80) + '...'
-    : referenceText;
-
-  const header = [
+  const lines = [
     'Gold Standard Accuracy Report',
     '==============================',
-    `Document : ${docName}`,
-    `Reference: ${refPreview}`,
-    `Timestamp: ${timestamp}`,
-    `Runs     : ${succeededCount}`,
+    `Document    : ${docName}`,
+    `Experiment  : ${experimentResult.experiment_id}`,
+    `Timestamp   : ${timestamp}`,
+    `Runs scored : ${experimentResult.successful_n}`,
+    `Doc type    : ${report.doc_type || 'unknown'}`,
     '',
-    '── Titan Embedding Cosine vs Reference ──',
-    `  Mean   : ${f(e.mean)}    Min : ${f(e.min)}    Max : ${f(e.max)}`,
-    `  Std Dev: ${f(e.std)}`,
-    '',
-    '── BERTScore F1 vs Reference (typical range ~0.84–0.97) ──',
-    `  Mean   : ${f(r.mean)}    Min : ${f(r.min)}    Max : ${f(r.max)}`,
-    `  Std Dev: ${f(r.std)}`,
-    '',
-    '── Per-Run Scores ──',
-    `${'Run'.padEnd(5)} ${'Emb Cosine'.padEnd(12)} ${'BERTScore F1'}`,
-    `${'---'.padEnd(5)} ${'----------'.padEnd(12)} ${'------------'}`,
   ];
 
-  const embScores = comparison.embedding_cosine.scores;
-  const bertScores = comparison.bertscore_f1.scores;
-  const rows = embScores.map((emb, i) =>
-    `R${String(i + 1).padStart(2, '0')}   ${emb.toFixed(4).padEnd(12)} ${bertScores[i].toFixed(4)}`
-  );
-
-  return [...header, ...rows, ''].join('\n');
-}
-
-function buildUsageReport(docName, timestamp, results) {
-  const pad = (s, n) => String(s).padStart(n);
-  const fmt = n => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-
-  const lines = [
-    'Model & Token Usage Report',
-    '==========================',
-    `Document : ${docName}`,
-    `Timestamp: ${timestamp}`,
-    `Runs     : ${results.length}`,
-    '',
-    `${'Run'.padEnd(4)}  ${'Stage'.padEnd(11)}  ${'Model'.padEnd(50)}  ${'Input'.padStart(7)}  ${'Output'.padStart(7)}  ${'Total'.padStart(7)}`,
-    `${'---'.padEnd(4)}  ${'----------'.padEnd(11)}  ${'--------------------------------------------------'.padEnd(50)}  ${'-------'.padStart(7)}  ${'-------'.padStart(7)}  ${'-------'.padStart(7)}`,
-  ];
-
-  const stageTotals = {};
-
-  results.forEach((r, i) => {
-    const num = String(i + 1).padStart(2, '0');
-    if (!r.usage || Object.keys(r.usage).length === 0) {
-      lines.push(`${num.padEnd(4)}  ${'(failed)'.padEnd(64)}  ${'—'.padStart(7)}  ${'—'.padStart(7)}  ${'—'.padStart(7)}`);
-      return;
-    }
-    for (const [stage, s] of Object.entries(r.usage)) {
-      const total = (s.input_tokens || 0) + (s.output_tokens || 0);
-      lines.push(`${num.padEnd(4)}  ${stage.padEnd(11)}  ${(s.model || '').padEnd(50)}  ${pad(fmt(s.input_tokens || 0), 7)}  ${pad(fmt(s.output_tokens || 0), 7)}  ${pad(fmt(total), 7)}`);
-      if (!stageTotals[stage]) stageTotals[stage] = { input: 0, output: 0 };
-      stageTotals[stage].input += s.input_tokens || 0;
-      stageTotals[stage].output += s.output_tokens || 0;
-    }
-  });
-
-  lines.push('', 'Totals', '------');
-  let grandInput = 0, grandOutput = 0;
-  for (const [stage, t] of Object.entries(stageTotals)) {
-    const total = t.input + t.output;
-    lines.push(`${stage.padEnd(11)}  input ${fmt(t.input).padStart(8)}  output ${fmt(t.output).padStart(8)}  total ${fmt(total).padStart(8)}`);
-    grandInput += t.input;
-    grandOutput += t.output;
+  if (gold.embedding_cosine) {
+    const e = gold.embedding_cosine;
+    lines.push(
+      '── Titan Embedding Cosine vs Reference ──',
+      `  Mean: ${f(e.mean)}   Min: ${f(e.min)}   Max: ${f(e.max)}   Std: ${f(e.std)}`,
+      '',
+    );
   }
-  lines.push(`${'Grand total'.padEnd(11)}  input ${fmt(grandInput).padStart(8)}  output ${fmt(grandOutput).padStart(8)}  total ${fmt(grandInput + grandOutput).padStart(8)}`);
+
+  if (gold.bertscore_f1) {
+    const b = gold.bertscore_f1;
+    lines.push(
+      '── BERTScore F1 vs Reference (typical range ~0.84–0.97) ──',
+      `  Mean: ${f(b.mean)}   Min: ${f(b.min)}   Max: ${f(b.max)}   Std: ${f(b.std)}`,
+      '',
+    );
+  }
+
+  if (variance.embedding_cosine) {
+    const v = variance.embedding_cosine;
+    lines.push(
+      '── Inter-run Variance (Embedding Cosine) ──',
+      `  Mean: ${f(v.mean)}   Std: ${f(v.std)}   Min: ${f(v.min)}   Max: ${f(v.max)}`,
+      '',
+    );
+  }
+
+  if (gold.embedding_cosine && gold.bertscore_f1) {
+    const runNumbers = gold.embedding_cosine.run_numbers ||
+      gold.embedding_cosine.scores.map((_, i) => i + 1);
+    lines.push(
+      '── Per-Run Scores ──',
+      `${'Run'.padEnd(5)} ${'Emb Cosine'.padEnd(12)} ${'BERTScore F1'}`,
+      `${'---'.padEnd(5)} ${'----------'.padEnd(12)} ${'------------'}`,
+      ...gold.embedding_cosine.scores.map((emb, i) =>
+        `R${String(runNumbers[i]).padStart(2, '0')}   ${emb.toFixed(4).padEnd(12)} ${gold.bertscore_f1.scores[i].toFixed(4)}`
+      ),
+      '',
+    );
+  }
 
   return lines.join('\n');
 }
 
 // ── Zip builder ───────────────────────────────────────────────────────────────
 
-async function buildAndDownloadZip(docName, timestamp, results, comparison, referenceText) {
+function formatTimestamp() {
+  const d = new Date();
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
+async function buildAndDownloadZip(docName, timestamp, experimentResult, referenceText) {
   const zip = new JSZip();
   const folder = zip.folder(`gold_${timestamp}`);
-  const succeeded = results.filter(r => r.summary !== null).length;
 
-  const manifest = [
-    'Gold Standard Test',
-    `Document : ${docName}`,
-    `Timestamp: ${timestamp}`,
-    `Runs     : ${results.length}`,
-    `Succeeded: ${succeeded}`,
-    '',
-  ];
-
-  results.forEach((r, i) => {
-    const num = String(i + 1).padStart(2, '0');
-    if (r.summary !== null) {
-      folder.file(`summary_${num}.txt`, r.summary);
-      manifest.push(`Run ${num}: OK`);
-    } else {
-      manifest.push(`Run ${num}: FAILED — ${r.error || 'unknown'}`);
-    }
-  });
-
-  folder.file('manifest.txt', manifest.join('\n'));
-  folder.file('usage_report.txt', buildUsageReport(docName, timestamp, results));
   folder.file('reference.txt', referenceText);
+  folder.file('gold_report.txt', buildTextReport(docName, timestamp, experimentResult));
 
-  if (comparison) {
-    folder.file('gold_comparison.json', JSON.stringify(comparison, null, 2));
-    folder.file('gold_comparison_report.txt', buildGoldReport(docName, timestamp, succeeded, comparison, referenceText));
+  if (experimentResult.report) {
+    folder.file('comparison.json', JSON.stringify(experimentResult.report, null, 2));
+  }
+
+  if (experimentResult.narrative) {
+    folder.file('narrative.md', experimentResult.narrative);
   }
 
   const blob = await zip.generateAsync({ type: 'blob' });
@@ -484,17 +417,11 @@ async function buildAndDownloadZip(docName, timestamp, results, comparison, refe
 
 // ── Test runner ───────────────────────────────────────────────────────────────
 
-function formatTimestamp() {
-  const d = new Date();
-  const p = n => String(n).padStart(2, '0');
-  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
-}
-
 async function runGoldTest() {
   if (isRunning || !currentDocFile || !currentRefFile) return;
 
   const n = parseInt(document.getElementById('run-count').value, 10);
-  if (!(n >= 1 && n <= 200)) return;
+  if (!(n >= 2 && n <= 100)) return;
 
   let referenceText;
   try {
@@ -506,96 +433,41 @@ async function runGoldTest() {
 
   isRunning = true;
   document.getElementById('run-btn').disabled = true;
+  document.getElementById('run-grid').innerHTML = '';
 
   const file = currentDocFile;
   const timestamp = formatTimestamp();
-  const results = Array.from({ length: n }, () => ({ summary: null, usage: null, error: null }));
-  let doneCount = 0;
 
-  buildRunGrid(n);
-  setHeader(`Submitting ${n} upload${n > 1 ? 's' : ''}…`);
-
-  let jobIds;
   try {
-    jobIds = await Promise.all(
-      results.map((r, i) =>
-        new Promise(resolve => setTimeout(resolve, i * 200))
-          .then(() => submitJob(file, i + 1))
-          .catch(err => {
-            if (err.message === 'auth') throw err;
-            r.error = err.message;
-            updateRunTile(i + 1, 'failed');
-            logRunError(i + 1, err.message);
-            return null;
-          })
-      )
-    );
-  } catch (err) {
-    if (err.message === 'auth') handleSessionExpired();
-    else setHeader(`Submission error: ${err.message}`);
-    isRunning = false;
-    setRunBtnEnabled();
-    return;
-  }
+    setHeader('Uploading document…');
+    const sourceDocumentKey = await uploadDocument(file);
 
-  setHeader(`Processing — 0 / ${n} complete`);
+    setHeader(`Starting ${n} pipeline runs…`);
+    const experimentId = await startExperiment(sourceDocumentKey, n, referenceText);
 
-  await Promise.all(
-    jobIds.map((job_id, i) => {
-      if (!job_id) return Promise.resolve();
-      return pollUntilDone(job_id, i + 1)
-        .then(({ summary, usage }) => {
-          results[i].summary = summary;
-          results[i].usage = usage;
-          updateRunTile(i + 1, 'done');
-          doneCount++;
-          setHeader(`Processing — ${doneCount} / ${n} complete`);
-        })
-        .catch(err => {
-          if (err.message !== 'auth') {
-            results[i].error = err.message;
-            updateRunTile(i + 1, 'failed');
-            logRunError(i + 1, err.message);
-          }
-        });
-    })
-  );
+    setHeader(`Runs complete: 0 / ${n} — waiting…`);
+    const experimentResult = await pollExperiment(experimentId, n);
 
-  const succeeded = results.filter(r => r.summary !== null).length;
-  if (succeeded === 0) {
-    setHeader('All runs failed — nothing to download.');
-    isRunning = false;
-    setRunBtnEnabled();
-    return;
-  }
+    setHeader('Building download…');
+    await buildAndDownloadZip(file.name, timestamp, experimentResult, referenceText);
 
-  let comparison = null;
-  let scoringError = null;
-  if (succeeded >= 1) {
-    setHeader(`Complete — ${succeeded}/${n} succeeded. Scoring against reference…`);
-    const summaries = results.filter(r => r.summary !== null).map(r => r.summary);
-    try {
-      comparison = await runGoldComparison(summaries, referenceText);
-    } catch (err) {
-      if (err.message === 'auth') { handleSessionExpired(); return; }
-      scoringError = err.message;
-      console.error('gold-compare failed:', err.message);
+    const successfulN = experimentResult.successful_n ?? n;
+    const goldResults = experimentResult.report?.gold_results;
+    if (goldResults) {
+      showGoldPanel(goldResults, successfulN);
     }
+
+    setHeader(`Done — gold_${timestamp}.zip downloaded (${successfulN} run${successfulN !== 1 ? 's' : ''} scored).`);
+  } catch (err) {
+    if (err.message === 'auth') {
+      handleSessionExpired();
+    } else {
+      setHeader(`Error: ${err.message}`);
+    }
+  } finally {
+    isRunning = false;
+    setRunBtnEnabled();
   }
-
-  setHeader('Building zip…');
-  await buildAndDownloadZip(file.name, timestamp, results, comparison, referenceText);
-
-  if (comparison) {
-    showGoldPanel(comparison, succeeded);
-    setHeader(`Done — gold_${timestamp}.zip downloaded (${succeeded} summar${succeeded !== 1 ? 'ies' : 'y'} + accuracy scores).`);
-  } else {
-    const errSuffix = scoringError ? ` Scoring error: ${scoringError}.` : '';
-    setHeader(`Done — gold_${timestamp}.zip downloaded (${succeeded} summary file${succeeded !== 1 ? 's' : ''}, no accuracy metrics).${errSuffix}`);
-  }
-
-  isRunning = false;
-  setRunBtnEnabled();
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────

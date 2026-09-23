@@ -3,6 +3,7 @@ locals {
     "api-presign",
     "api-status",
     "api-summary",
+    "api-experiment-status",
     "pipeline-starter",
     "classifier",
     "extractor",

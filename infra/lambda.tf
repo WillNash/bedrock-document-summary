@@ -33,6 +33,12 @@ data "archive_file" "api_summary" {
   output_path = "${path.module}/lambda_packages/api_summary.zip"
 }
 
+data "archive_file" "api_experiment_status" {
+  type        = "zip"
+  source_dir  = "${path.module}/../lambda/api_experiment_status"
+  output_path = "${path.module}/lambda_packages/api_experiment_status.zip"
+}
+
 data "archive_file" "pipeline_starter" {
   type        = "zip"
   source_dir  = "${path.module}/../lambda/pipeline_starter"
@@ -209,6 +215,38 @@ resource "aws_lambda_function" "api_summary" {
   logging_config {
     log_format = "JSON"
     log_group  = aws_cloudwatch_log_group.lambda["api-summary"].name
+  }
+
+  tags = local.common_tags
+
+  depends_on = [aws_cloudwatch_log_group.lambda]
+}
+
+resource "aws_lambda_function" "api_experiment_status" {
+  function_name    = "${local.name_prefix}-api-experiment-status"
+  filename         = data.archive_file.api_experiment_status.output_path
+  source_code_hash = data.archive_file.api_experiment_status.output_base64sha256
+  handler          = "handler.lambda_handler"
+  runtime          = "python3.12"
+  architectures    = ["arm64"]
+  role             = aws_iam_role.api.arn
+  timeout          = 15
+  memory_size      = 128
+
+  environment {
+    variables = {
+      EXPERIMENTS_TABLE = aws_dynamodb_table.experiments.name
+      SUMMARIES_BUCKET  = aws_s3_bucket.summaries.bucket
+    }
+  }
+
+  tracing_config {
+    mode = "Active"
+  }
+
+  logging_config {
+    log_format = "JSON"
+    log_group  = aws_cloudwatch_log_group.lambda["api-experiment-status"].name
   }
 
   tags = local.common_tags
