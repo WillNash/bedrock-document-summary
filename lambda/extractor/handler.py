@@ -66,21 +66,18 @@ def lambda_handler(event, context):
     s3_response = s3_client.get_object(Bucket=bucket, Key=key)
     document_text = s3_response['Body'].read().decode('utf-8', errors='replace')
 
-    schema = _load_schema(doc_type)
-    system_prompt = _get_prompt_text(doc_type)
     model_id = event.get('extractor_model_id') or os.environ['BEDROCK_MODEL_ID']
     temperature = float(event['temperature']) if event.get('temperature') is not None else 0
-    arns, versions = _get_prompt_config()
-    prompt_arn = arns[doc_type]
-    prompt_version = versions[doc_type]
 
-    tool_def = {
-        'toolSpec': {
-            'name': 'extract_document',
-            'description': f'Extract structured data from a {doc_type} medical document.',
-            'inputSchema': {'json': schema},
-        }
-    }
+    if event.get('custom_prompt'):
+        system_prompt = event['custom_prompt']
+        prompt_arn = ''
+        prompt_version = ''
+    else:
+        system_prompt = _get_prompt_text(doc_type)
+        arns, versions = _get_prompt_config()
+        prompt_arn = arns[doc_type]
+        prompt_version = versions[doc_type]
 
     guardrail_config = {}
     if os.environ.get('GUARDRAIL_ID') and os.environ.get('GUARDRAIL_VERSION'):
@@ -90,22 +87,70 @@ def lambda_handler(event, context):
             'trace': 'disabled',
         }
 
+    has_custom_schema = 'custom_schema' in event
+    custom_schema_value = event['custom_schema'] if has_custom_schema else None
+
+    base_result = {
+        'job_id': job_id,
+        'bucket': bucket,
+        'key': key,
+        'doc_type': doc_type,
+        'experiment_id': event.get('experiment_id'),
+        'run_number': event.get('run_number'),
+        'extractor_model_id': event.get('extractor_model_id'),
+        'temperature': event.get('temperature'),
+    }
+    if event.get('custom_prompt'):
+        base_result['custom_prompt'] = event['custom_prompt']
+    if has_custom_schema:
+        base_result['custom_schema'] = custom_schema_value
+
     converse_kwargs = dict(
         modelId=model_id,
         system=[{'text': system_prompt}],
         messages=[{'role': 'user', 'content': [{'text': document_text}]}],
-        toolConfig={
-            'tools': [tool_def],
-            'toolChoice': {'tool': {'name': 'extract_document'}},
-        },
         inferenceConfig={'maxTokens': 4096, 'temperature': temperature},
     )
     if guardrail_config:
         converse_kwargs['guardrailConfig'] = guardrail_config
 
+    if has_custom_schema and custom_schema_value == '':
+        # Free-form: no tool use, model returns plain text
+        response = bedrock_runtime.converse(**converse_kwargs)
+        extracted_text = response['output']['message']['content'][0]['text']
+        usage = response.get('usage', {})
+        logger.info(json.dumps({'job_id': job_id, 'doc_type': doc_type, 'action': 'extracted_freeform'}))
+        return {
+            **base_result,
+            'extracted_text': extracted_text,
+            'usage_stats': {
+                **event.get('usage_stats', {}),
+                'extractor': {
+                    'model': model_id,
+                    'prompt_arn': prompt_arn,
+                    'prompt_version': prompt_version,
+                    'input_tokens': usage.get('inputTokens', 0),
+                    'output_tokens': usage.get('outputTokens', 0),
+                },
+            },
+        }
+
+    # Structured extraction with tool use
+    schema = json.loads(custom_schema_value) if (has_custom_schema and custom_schema_value) else _load_schema(doc_type)
+
+    converse_kwargs['toolConfig'] = {
+        'tools': [{
+            'toolSpec': {
+                'name': 'extract_document',
+                'description': f'Extract structured data from a {doc_type} medical document.',
+                'inputSchema': {'json': schema},
+            }
+        }],
+        'toolChoice': {'tool': {'name': 'extract_document'}},
+    }
+
     response = bedrock_runtime.converse(**converse_kwargs)
 
-    # Extract toolUse block from response
     content_blocks = response['output']['message']['content']
     tool_use_block = next(
         (block['toolUse'] for block in content_blocks if 'toolUse' in block),
@@ -115,19 +160,11 @@ def lambda_handler(event, context):
         raise ValueError('Bedrock response did not contain a toolUse block')
 
     extracted_data = tool_use_block['input']
-
     usage = response.get('usage', {})
     logger.info(json.dumps({'job_id': job_id, 'doc_type': doc_type, 'action': 'extracted'}))
 
     return {
-        'job_id': job_id,
-        'bucket': bucket,
-        'key': key,
-        'doc_type': doc_type,
-        'experiment_id': event.get('experiment_id'),
-        'run_number': event.get('run_number'),
-        'extractor_model_id': event.get('extractor_model_id'),
-        'temperature': event.get('temperature'),
+        **base_result,
         'extracted_data': extracted_data,
         'usage_stats': {
             **event.get('usage_stats', {}),

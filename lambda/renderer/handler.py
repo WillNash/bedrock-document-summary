@@ -75,6 +75,8 @@ def _write_experiment_outputs(event, summary_text, summaries_bucket, completed_a
             'prompt_version': extractor_stats.get('prompt_version', ''),
             'input_tokens': extractor_stats.get('input_tokens', 0),
             'output_tokens': extractor_stats.get('output_tokens', 0),
+            'custom_prompt': event.get('custom_prompt') or '',
+            'custom_schema': event['custom_schema'] if 'custom_schema' in event else None,
         },
         'timestamp': completed_at,
     }
@@ -139,10 +141,16 @@ def _maybe_start_comparison(experiment_id, summaries_bucket, expected_n, success
 def lambda_handler(event, context):
     job_id = event['job_id']
     doc_type = event['doc_type']
-    validated_data = event['validated_data']
 
-    template = jinja_env.get_template(TEMPLATE_FILES[doc_type])
-    summary_text = template.render(**validated_data)
+    if 'extracted_text' in event:
+        # Free-form path: write raw model output
+        summary_text = event['extracted_text']
+    elif 'custom_schema' in event and event['custom_schema']:
+        # Custom schema path: no matching Jinja2 template, JSON dump
+        summary_text = json.dumps(event['validated_data'], indent=2)
+    else:
+        template = jinja_env.get_template(TEMPLATE_FILES[doc_type])
+        summary_text = template.render(**event['validated_data'])
 
     summaries_bucket = os.environ['SUMMARIES_BUCKET']
     summary_key = f'summaries/{job_id}/summary.txt'
