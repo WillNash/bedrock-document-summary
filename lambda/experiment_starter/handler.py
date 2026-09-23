@@ -98,6 +98,8 @@ def lambda_handler(event, context):
         'source_document_key': source_document_key,
         'gold_key': gold_key,
     }
+    if 'temperature' in experiment_config:
+        experiment_config['temperature'] = Decimal(str(experiment_config['temperature']))
 
     s3_client.put_object(
         Bucket=summaries_bucket,
