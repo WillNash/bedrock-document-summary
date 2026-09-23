@@ -33,6 +33,7 @@ def lambda_handler(event, context):
         job_response = jobs_table.get_item(
             Key={'job_id': job_id},
             ProjectionExpression='experiment_id, run_number',
+            ConsistentRead=True,
         )
         job_item = job_response.get('Item', {})
         experiment_id = job_item.get('experiment_id')
