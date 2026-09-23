@@ -76,6 +76,8 @@ def lambda_handler(event, context):
         'bucket': bucket,
         'key': key,
         'doc_type': raw_label,
+        'experiment_id': event.get('experiment_id'),
+        'run_number': event.get('run_number'),
         'usage_stats': {
             'classifier': {
                 'model': model_id,

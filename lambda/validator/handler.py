@@ -40,6 +40,8 @@ def lambda_handler(event, context):
         'bucket': event['bucket'],
         'key': event['key'],
         'doc_type': doc_type,
+        'experiment_id': event.get('experiment_id'),
+        'run_number': event.get('run_number'),
         'validated_data': extracted_data,
         'usage_stats': event.get('usage_stats', {}),
     }
