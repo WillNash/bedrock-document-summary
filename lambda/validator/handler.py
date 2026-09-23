@@ -42,6 +42,8 @@ def lambda_handler(event, context):
         'doc_type': doc_type,
         'experiment_id': event.get('experiment_id'),
         'run_number': event.get('run_number'),
+        'extractor_model_id': event.get('extractor_model_id'),
+        'temperature': event.get('temperature'),
         'validated_data': extracted_data,
         'usage_stats': event.get('usage_stats', {}),
     }

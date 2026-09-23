@@ -32,12 +32,14 @@ def lambda_handler(event, context):
         jobs_table = dynamodb.Table(jobs_table_name)
         job_response = jobs_table.get_item(
             Key={'job_id': job_id},
-            ProjectionExpression='experiment_id, run_number',
+            ProjectionExpression='experiment_id, run_number, extractor_model_id, temperature',
             ConsistentRead=True,
         )
         job_item = job_response.get('Item', {})
         experiment_id = job_item.get('experiment_id')
         run_number = job_item.get('run_number')
+        extractor_model_id = job_item.get('extractor_model_id')
+        temperature = job_item.get('temperature')
 
         execution_input = {
             'job_id': job_id,
@@ -47,6 +49,10 @@ def lambda_handler(event, context):
         if experiment_id:
             execution_input['experiment_id'] = experiment_id
             execution_input['run_number'] = int(run_number)
+        if extractor_model_id:
+            execution_input['extractor_model_id'] = extractor_model_id
+        if temperature is not None:
+            execution_input['temperature'] = float(temperature)
 
         try:
             sfn_client.start_execution(

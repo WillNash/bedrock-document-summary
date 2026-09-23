@@ -289,15 +289,9 @@ resource "aws_iam_role_policy" "processing_bedrock_runtime" {
       Effect = "Allow"
       Action = ["bedrock:InvokeModel"]
       Resource = [
-        # System-defined inference profile ARN (no account segment)
-        "arn:aws:bedrock:${local.region}::inference-profile/${var.bedrock_classifier_model_id}",
-        "arn:aws:bedrock:${local.region}::inference-profile/${var.bedrock_model_id}",
-        # Cross-region inference profile ARN (account-scoped)
-        "arn:aws:bedrock:${local.region}:${local.account_id}:inference-profile/${var.bedrock_classifier_model_id}",
-        "arn:aws:bedrock:${local.region}:${local.account_id}:inference-profile/${var.bedrock_model_id}",
-        # Foundation-model ARN uses wildcard region — CRPs route to any region in the geo
-        "arn:aws:bedrock:*::foundation-model/${local.classifier_foundation_model_id}",
-        "arn:aws:bedrock:*::foundation-model/${local.extractor_foundation_model_id}",
+        "arn:aws:bedrock:*::inference-profile/*",
+        "arn:aws:bedrock:*:${local.account_id}:inference-profile/*",
+        "arn:aws:bedrock:*::foundation-model/*",
       ]
     }]
   })
