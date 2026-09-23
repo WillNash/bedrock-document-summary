@@ -289,11 +289,9 @@ resource "aws_iam_role_policy" "processing_bedrock_runtime" {
       Effect = "Allow"
       Action = ["bedrock:InvokeModel"]
       Resource = [
-        # All Anthropic cross-region inference profiles — extractor model is user-selectable
-        "arn:aws:bedrock:*::inference-profile/us.anthropic.*",
-        "arn:aws:bedrock:*:${local.account_id}:inference-profile/us.anthropic.*",
-        # All Anthropic foundation models (CRPs route to any region in the geo)
-        "arn:aws:bedrock:*::foundation-model/anthropic.*",
+        "arn:aws:bedrock:*::inference-profile/*",
+        "arn:aws:bedrock:*:${local.account_id}:inference-profile/*",
+        "arn:aws:bedrock:*::foundation-model/*",
       ]
     }]
   })
