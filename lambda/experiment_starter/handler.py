@@ -56,6 +56,9 @@ def lambda_handler(event, context):
     source_document_key = body.get('source_document_key', '').strip()
     gold_text = body.get('gold_text')
     config = body.get('config') or {}
+    extractor_model_id = config.get('extractor_model_id') or None
+    raw_temp = config.get('temperature')
+    temperature = float(raw_temp) if raw_temp is not None else None
 
     if not experiment_id:
         return _err(400, 'experiment_id is required')
@@ -127,14 +130,19 @@ def lambda_handler(event, context):
         job_id = str(uuid.uuid4())
         copy_key = f'uploads/{job_id}/{source_filename}'
 
-        jobs_table.put_item(Item={
+        job_item = {
             'job_id': job_id,
             'experiment_id': experiment_id,
             'run_number': Decimal(str(run_number)),
             'status': 'PENDING',
             'created_at': created_at,
             'user_id': 'experiment',
-        })
+        }
+        if extractor_model_id:
+            job_item['extractor_model_id'] = extractor_model_id
+        if temperature is not None:
+            job_item['temperature'] = Decimal(str(temperature))
+        jobs_table.put_item(Item=job_item)
 
         # Copy triggers S3 ObjectCreated → pipeline_starter → pipeline SM
         s3_client.copy_object(

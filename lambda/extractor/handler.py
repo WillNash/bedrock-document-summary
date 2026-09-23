@@ -68,7 +68,8 @@ def lambda_handler(event, context):
 
     schema = _load_schema(doc_type)
     system_prompt = _get_prompt_text(doc_type)
-    model_id = os.environ['BEDROCK_MODEL_ID']
+    model_id = event.get('extractor_model_id') or os.environ['BEDROCK_MODEL_ID']
+    temperature = float(event['temperature']) if event.get('temperature') is not None else 0
     arns, versions = _get_prompt_config()
     prompt_arn = arns[doc_type]
     prompt_version = versions[doc_type]
@@ -97,7 +98,7 @@ def lambda_handler(event, context):
             'tools': [tool_def],
             'toolChoice': {'tool': {'name': 'extract_document'}},
         },
-        inferenceConfig={'maxTokens': 4096, 'temperature': 0},
+        inferenceConfig={'maxTokens': 4096, 'temperature': temperature},
     )
     if guardrail_config:
         converse_kwargs['guardrailConfig'] = guardrail_config
@@ -125,6 +126,8 @@ def lambda_handler(event, context):
         'doc_type': doc_type,
         'experiment_id': event.get('experiment_id'),
         'run_number': event.get('run_number'),
+        'extractor_model_id': event.get('extractor_model_id'),
+        'temperature': event.get('temperature'),
         'extracted_data': extracted_data,
         'usage_stats': {
             **event.get('usage_stats', {}),

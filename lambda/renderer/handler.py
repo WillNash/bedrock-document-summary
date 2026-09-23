@@ -70,6 +70,7 @@ def _write_experiment_outputs(event, summary_text, summaries_bucket, completed_a
         },
         'extraction': {
             'model_id': extractor_stats.get('model', ''),
+            'temperature': float(event['temperature']) if event.get('temperature') is not None else 0,
             'prompt_arn': extractor_stats.get('prompt_arn', ''),
             'prompt_version': extractor_stats.get('prompt_version', ''),
             'input_tokens': extractor_stats.get('input_tokens', 0),

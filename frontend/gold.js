@@ -165,7 +165,7 @@ async function uploadDocument(file) {
 
 // ── Experiment ────────────────────────────────────────────────────────────────
 
-async function startExperiment(sourceDocumentKey, expectedN, goldText) {
+async function startExperiment(sourceDocumentKey, expectedN, goldText, config) {
   if (!await ensureValidToken()) throw new Error('auth');
 
   const experimentId = crypto.randomUUID();
@@ -178,6 +178,7 @@ async function startExperiment(sourceDocumentKey, expectedN, goldText) {
       expected_n: expectedN,
       source_document_key: sourceDocumentKey,
       gold_text: goldText,
+      config,
     }),
   });
   if (res.status === 401) throw new Error('auth');
@@ -442,8 +443,14 @@ async function runGoldTest() {
     setHeader('Uploading document…');
     const sourceDocumentKey = await uploadDocument(file);
 
+    const modelInput = document.getElementById('model-input').value.trim();
+    const temperatureInput = parseFloat(document.getElementById('temperature-input').value);
+    const config = {};
+    if (modelInput) config.extractor_model_id = modelInput;
+    config.temperature = Number.isFinite(temperatureInput) ? temperatureInput : 0;
+
     setHeader(`Starting ${n} pipeline runs…`);
-    const experimentId = await startExperiment(sourceDocumentKey, n, referenceText);
+    const experimentId = await startExperiment(sourceDocumentKey, n, referenceText, config);
 
     setHeader(`Runs complete: 0 / ${n} — waiting…`);
     const experimentResult = await pollExperiment(experimentId, n);
