@@ -1,36 +1,38 @@
 # Comparison Flows — Complete Step-by-Step Breakdown
 
-There are two distinct flows depending on how the comparison is initiated:
+There are two ways to initiate a comparison experiment, both of which use the document pipeline Express state machine and the comparison Standard state machine:
 
-- **Flow A — gold.html (browser-driven):** User uploads a document and reference file through the existing UI. The pipeline runs N times, the browser collects summaries and calls `POST /gold-compare` directly. The comparison state machine is NOT involved.
-- **Flow B — experiment API (server-driven):** Caller POSTs to `POST /experiments`. The source document is already in S3 and is copied N times server-side. When all pipeline runs complete, the renderer automatically triggers the comparison state machine.
+- **Flow A — gold.html (browser-initiated):** User picks a document and reference file in the browser, chooses N runs, and clicks Run Test. The browser uploads the document once, calls `POST /experiments`, then polls `GET /experiments/{experimentId}` every 10s until the comparison state machine completes.
+- **Flow B — direct API call:** Caller POSTs to `POST /experiments` directly with an existing S3 key as `source_document_key`. Identical to Flow A from `experiment_starter` onwards.
 
-The comparison state machine (`infra/comparison_sm.json.tpl`) is only used in Flow B. The frontend has not yet been updated to call `POST /experiments`.
+The old browser-orchestrated flow (N presign uploads + in-browser `/gold-compare` call) no longer exists. The `/gold-compare` endpoint remains deployed but is not called by the frontend.
 
 ---
 
-## Flow A — gold.html (Browser-Driven)
+## Flow A — gold.html (Browser-Initiated)
 
 ### A0. Prerequisites — Page Load and Auth
 
 **File:** `frontend/gold.html`, `frontend/gold.js`
 
-On load, `init()` (`gold.js:603`) checks `localStorage` for a valid `id_token`. Silent refresh is attempted via the Cognito token endpoint (`/oauth2/token`, grant_type `refresh_token`) if the token is expired. If that fails, the auth panel is shown.
+On load, `init()` checks `localStorage` for a valid `id_token`. Silent refresh is attempted via the Cognito token endpoint (`/oauth2/token`, grant_type `refresh_token`) if the token is expired. If that fails, the auth panel is shown.
 
 Tokens stored in `localStorage`: `id_token`, `access_token`, `refresh_token`.
 
-The Run button is disabled until both files are chosen (`gold.js:123`):
+The Run button is disabled until both files are chosen and run count is valid (`gold.js:126`):
 - **Document file** (`.txt`, `.md`, `.csv`, `.pdf`) — the medical document to summarise
 - **Reference file** (`.txt`, `.md`) — the gold standard to score against
 
-The reference file is read into browser memory immediately on selection (`gold.js:501`). It is never uploaded to S3.
+Run count: 2–100.
 
 ---
 
-### A1. Presign — Per Run (N times, staggered 200ms)
+### A1. Presign — Single Upload
 
-**Function:** `submitJob()` (`gold.js:174`)  
+**Function:** `uploadDocument()` (`gold.js:136`)  
 **API:** `POST /presign` → `api_presign` Lambda (`lambda/api_presign/handler.py`)
+
+Called once for the source document.
 
 #### Quota check
 **Read/Write:** DynamoDB `jobs` table, key `quota#{user_id}#{today}`  
@@ -47,201 +49,114 @@ filename:   sanitised filename
 ```
 
 #### Presigned POST URL
-Generates S3 presigned POST for `uploads/{job_id}/{filename}`. TTL 300s. Content-Type condition: `starts-with ''`.
+Generates S3 presigned POST for `uploads/{job_id}/{filename}`. TTL 300s.
 
 **Response to browser:** `{job_id, presign_url, presign_fields}`
 
+`uploadDocument()` returns `"uploads/{job_id}/{file.name}"` — this becomes `source_document_key` for the experiment.
+
 ---
 
-### A2. S3 Upload — Per Run
+### A2. S3 Upload — Single
 
 **Trigger:** Presign response received  
 **Write:** S3 uploads bucket, `uploads/{job_id}/{filename}`
 
 Browser constructs `FormData` with all `presign_fields` first, file last (required by S3 policy). POSTs directly to S3, bypassing API Gateway.
 
-Uploads bucket: KMS encrypted (PHI CMK), versioned, 30-day lifecycle expiry on `uploads/` prefix.
+This upload fires an S3 `ObjectCreated` event which triggers `pipeline_starter`. That pipeline run has **no experiment context** — the job record has no `experiment_id` or `run_number`. Its summary is written to `summaries/{job_id}/summary.txt` but is not accessible via the user-facing API (the `user_id` is the actual user's Cognito sub, but the job is not linked to any experiment). This "seed" run is a side effect of needing to land the document in S3 and its output is not included in experiment results.
 
 ---
 
-### A3. Pipeline Starter — Per Run
+### A3. Start Experiment
 
-**Lambda:** `pipeline_starter` (`lambda/pipeline_starter/handler.py`)  
-**Trigger:** S3 `ObjectCreated:*` event on `uploads/` prefix
+**Function:** `startExperiment()` (`gold.js:168`)  
+**API:** `POST /experiments` → `experiment_starter` Lambda
 
-Parses `job_id` from key (`uploads/{job_id}/{filename}`).
+Generates a UUID v4 `experimentId` client-side via `crypto.randomUUID()`. Reads the reference file text and sends it as `gold_text`.
 
-**Read:** DynamoDB `jobs` table — fetches `experiment_id` and `run_number` from the job record. For Flow A these are absent, so execution input will not include experiment context.
-
-**Write:** Step Functions — starts pipeline EXPRESS execution, name=`job_id` (deduplication: `ExecutionAlreadyExists` treated as no-op)
-
-Execution input:
-```json
-{"job_id": "...", "bucket": "...", "key": "uploads/{job_id}/{filename}"}
-```
-
-**Write:** DynamoDB `jobs` table — conditional `SET status = RUNNING WHERE status = PENDING`
-
----
-
-### A4. Document Pipeline State Machine
-
-**Definition:** `infra/state_machine.json.tpl`  
-**Type:** EXPRESS  
-**Logging:** ERROR only, `include_execution_data = false`
-
-Each state's return value becomes the full input to the next state. Every processing state has `Retry` on transient Lambda errors and `Catch` on `States.ALL` → `MarkJobFailed` with `ResultPath: "$.error"` (merges error into existing input, preserving `job_id` at top level).
-
-#### State 1: ClassifyDocument → `classifier`
-
-**Input:** `{job_id, bucket, key}`
-
-**Read:** S3 uploads bucket — raw document text  
-**Read:** Bedrock Prompt Management — classifier system prompt via `bedrock-agent.get_prompt()`  
-**Bedrock call:** `bedrock-runtime.converse()` — Claude Haiku, `maxTokens=20`, `temperature=0`, guardrail optionally applied  
-
-Validates response against hardcoded set: `{lab_result, doctors_notes, injury_doc, visit_assessment, psych_eval}`
-
-**Output:**
-```json
-{"job_id": "...", "bucket": "...", "key": "...", "doc_type": "lab_result",
- "usage_stats": {"classifier": {"model": "...", "input_tokens": N, "output_tokens": N}}}
-```
-**Next:** ExtractData
-
-#### State 2: ExtractData → `extractor`
-
-**Input:** classifier output above
-
-**Read:** S3 uploads bucket — document text fetched again (not passed through execution state to keep PHI out of Step Functions logs)  
-**Read:** Bedrock Prompt Management — doc-type-specific extraction prompt  
-**Read:** Bundled `schemas/{doc_type}_schema.json` (included in Lambda zip at build time)  
-**Bedrock call:** `bedrock-runtime.converse()` — Claude Sonnet, forced tool use (`toolChoice: {tool: {name: "extract_document"}}`), `maxTokens=4096`, `temperature=0`
-
-Extracts `toolUse.input` from response.
-
-**Output:**
-```json
-{"job_id": "...", "bucket": "...", "key": "...", "doc_type": "...",
- "extracted_data": {}, "usage_stats": {"classifier": {...}, "extractor": {...}}}
-```
-**Next:** ValidateData
-
-#### State 3: ValidateData → `validator`
-
-**Input:** extractor output above
-
-**Read:** Bundled `schemas/{doc_type}_schema.json`  
-`jsonschema.validate()` — no AWS calls. Raises on failure → `Catch` → `MarkJobFailed`.
-
-Renames `extracted_data` → `validated_data`.
-
-**Output:**
-```json
-{"job_id": "...", "bucket": "...", "key": "...", "doc_type": "...",
- "validated_data": {}, "usage_stats": {...}}
-```
-**Next:** RenderSummary
-
-#### State 4: RenderSummary → `renderer`
-
-**Input:** validator output above
-
-**Read:** Bundled `templates/{doc_type}.j2` — Jinja2 template  
-Renders `template.render(**validated_data)`.
-
-**Write:** S3 summaries bucket
-- `summaries/{job_id}/summary.txt`
-- `summaries/{job_id}/usage.json`
-
-**Write:** DynamoDB `jobs` table — `SET status = COMPLETED, doc_type = ..., completed_at = ...`
-
-Checks `event.get('experiment_id')` — absent in Flow A, so no experiment writes and no comparison SM trigger.
-
-**Output:** `{job_id, summary_key}`  
-**Next:** JobComplete (Succeed)
-
-#### Error path: MarkJobFailed → `fail_handler`
-
-**Trigger:** Any `Catch` block; `ResultPath: "$.error"` preserves `job_id` at top level  
-**Write:** DynamoDB `jobs` table — `SET status = FAILED, error_message = ...` (truncated to 1000 chars)  
-**Next:** JobFailed (Fail terminal)
-
----
-
-### A5. Browser Polling — Per Run
-
-**Function:** `pollUntilDone()` (`gold.js:203`)  
-All N jobs polled in parallel. Each tick: wait 5s, then:
-
-**`GET /jobs/{jobId}` → `api_status`**  
-**Read:** DynamoDB `jobs` table — ownership check (404 if `user_id` mismatch)  
-Returns: `{job_id, status, doc_type?, error_message?, completed_at?}`
-
-On `COMPLETED`:  
-**`GET /summaries/{jobId}` → `api_summary`**  
-**Read:** DynamoDB `jobs` table — ownership + status check  
-**Read:** S3 summaries bucket — `summaries/{job_id}/summary.txt` and `usage.json`  
-Returns: `{job_id, doc_type, summary, usage}`
-
-Summary text held in browser memory. Timeout: 120 × 5s = 10 minutes.
-
----
-
-### A6. Gold Comparison — Direct Lambda Call
-
-**Function:** `runGoldComparison()` (`gold.js:240`)  
-**Trigger:** All polls settle, ≥1 succeeded  
-**API:** `POST /gold-compare` → `gold_comparator` Lambda (Docker image, 5120 MB, 300s timeout)
-
-**Request:**
-```json
-{"texts": ["summary 1", ...], "reference": "gold reference text from browser memory"}
-```
-Limits: texts 2–200; BERTScore capped at 20 (CPU constraint).
-
-**Cold start handling:** 503 on first attempt → waits 60s → retries once. SciBERT model loads at module level and can exceed API Gateway's 29s timeout on cold start.
-
-**Lambda processing:**  
-- Titan embeddings for each summary + reference, fetched in parallel via `ThreadPoolExecutor`
-- Cosine similarity = dot product (Titan normalises vectors)
-- BERTScore F1 via `allenai/scibert_scivocab_uncased`, 8 layers, CPU. Tokenizer capped at **256** tokens (keeps inference under 29s API Gateway limit — BERT attention is O(n²))
-
-**Response:**
+**Request body:**
 ```json
 {
-  "embedding_cosine": {"scores": [...], "mean": ..., "min": ..., "max": ..., "std": ..., "n": N},
-  "bertscore_f1":     {"scores": [...], "mean": ..., "min": ..., "max": ..., "std": ..., "n": N}
+  "experiment_id": "<uuid>",
+  "expected_n": N,
+  "source_document_key": "uploads/{job_id}/{filename}",
+  "gold_text": "<reference text from browser>"
 }
 ```
 
+For the full server-side handling of this request, see [Flow B, step B0](#b0-caller--post-experiments).
+
+`startExperiment()` returns `experimentId` on success.
+
 ---
 
-### A7. Output — Client-Side Zip
+### A4. Pipeline Runs (Server-Side)
 
-All assembly is client-side using JSZip. Nothing written server-side beyond what the pipeline already produced.
+`experiment_starter` copies the source document N times in a loop. Each S3 copy triggers `pipeline_starter` → pipeline Express SM. All N runs execute in parallel without further browser involvement.
+
+For full detail see [Flow B, steps B1–B2](#b1-pipeline-starter--per-run-n-times-in-parallel).
+
+When the last run completes, `renderer` starts the comparison STANDARD state machine. See [Flow B, step B3](#b3-comparison-state-machine).
+
+---
+
+### A5. Poll Experiment Status
+
+**Function:** `pollExperiment()` (`gold.js:192`)  
+**API:** `GET /experiments/{experimentId}` → `api_experiment_status` Lambda (`lambda/api_experiment_status/handler.py`)  
+**Interval:** 10s. **Timeout:** 180 ticks × 10s = 30 minutes.
+
+Each tick:
+
+**Read:** DynamoDB `experiments` table — `GetItem` by `experiment_id`  
+Returns: `experiment_id`, `status`, `expected_n`, `completed_n`, `successful_n`, `created_at`, `completed_at?`, `error_message?`
+
+If `status == COMPLETED`:  
+**Read:** S3 summaries bucket — `experiments/{experimentId}/report/comparison.json`  
+**Read:** S3 summaries bucket — `experiments/{experimentId}/report/narrative.md`  
+Appended to response as `report` and `narrative`.
+
+Header is updated each tick: `"Runs complete: {completed_n} / {expectedN} — comparing…"`
+
+Terminal states:
+- `COMPLETED` → returns full data payload, polling ends
+- `COMPARISON_FAILED` → throws with `data.error_message`
+- 180 ticks elapsed → throws `"Timed out after 30 minutes"`
+
+---
+
+### A6. Results Display and Download
+
+**Trigger:** `pollExperiment()` resolves
+
+**Zip download** — `buildAndDownloadZip()` (`gold.js:394`) — triggers automatically:
 
 | File in zip | Content |
 |-------------|---------|
-| `summary_01.txt` … `summary_N.txt` | Individual pipeline summaries |
-| `manifest.txt` | Per-run OK/FAILED status |
-| `usage_report.txt` | Token usage per run per stage, model IDs, grand totals |
-| `reference.txt` | The reference file supplied by the user |
-| `gold_comparison.json` | Raw comparator response (if scoring succeeded) |
-| `gold_comparison_report.txt` | Human-readable accuracy report with per-run scores |
+| `reference.txt` | The reference text supplied by the user |
+| `gold_report.txt` | Client-side text report built from `experimentResult.report` — gold scores, variance stats, per-run table |
+| `comparison.json` | `experimentResult.report` — full comparison SM output (variance_results, gold_results, doc_type, etc.) |
+| `narrative.md` | `experimentResult.narrative` — the Claude-generated Markdown analysis from `report_generator` |
 
-Inline panel shows embedding cosine and BERTScore F1 stats + per-run score table (colour-coded ≥0.8 green, ≥0.6 amber).
+**Results panel** — `showGoldPanel()` (`gold.js:233`):
+
+Reads `experimentResult.report.gold_results`. Displays:
+- Summary stat cards: Titan embedding cosine mean/min/max/std, BERTScore F1 mean/min/max/std
+- Per-run score table keyed by `gold_results.embedding_cosine.run_numbers`, colour-coded (≥0.8 green, ≥0.6 amber)
+
+Individual run summaries are not displayed or included in the zip. They are stored server-side at `experiments/{id}/runs/{n}/summary.txt` but are not accessible via the API (experiment job records have `user_id: "experiment"`, so `GET /summaries/{jobId}` returns 404 on the ownership check).
 
 ---
 
 ---
 
-## Flow B — Experiment API (Server-Driven, Comparison State Machine)
+## Flow B — Direct API Call (Programmatic)
 
 ### B0. Caller — `POST /experiments`
 
 **Lambda:** `experiment_starter` (`lambda/experiment_starter/handler.py`)  
-**Trigger:** Direct API call with JWT auth (no frontend page currently calls this)
+**Trigger:** `POST /experiments` with JWT auth. Called by the gold.html frontend via `startExperiment()` (Flow A) and directly by programmatic callers (Flow B).
 
 **Request body:**
 ```json
@@ -328,9 +243,43 @@ Both fields are present (written by `experiment_starter`).
 
 ### B2. Document Pipeline State Machine — Per Run
 
-Identical to Flow A steps A4 (ClassifyDocument → ExtractData → ValidateData) with the same S3 reads, Bedrock calls, and data shapes.
+Identical to the pipeline flow (ClassifyDocument → ExtractData → ValidateData) with the same S3 reads, Bedrock calls, and data shapes.
 
 The only difference is in **RenderSummary**:
+
+#### State 1: ClassifyDocument → `classifier`
+
+**Input:** `{job_id, bucket, key, experiment_id, run_number}`
+
+**Read:** S3 uploads bucket — raw document text  
+**Read:** Bedrock Prompt Management — classifier system prompt via `bedrock-agent.get_prompt()`  
+**Bedrock call:** `bedrock-runtime.converse()` — Claude Haiku, `maxTokens=20`, `temperature=0`, guardrail optionally applied  
+
+Validates response against hardcoded set: `{lab_result, doctors_notes, injury_doc, visit_assessment, psych_eval}`
+
+**Output:**
+```json
+{"job_id": "...", "bucket": "...", "key": "...", "doc_type": "lab_result",
+ "experiment_id": "...", "run_number": N,
+ "usage_stats": {"classifier": {"model": "...", "input_tokens": N, "output_tokens": N}}}
+```
+**Next:** ExtractData
+
+#### State 2: ExtractData → `extractor`
+
+**Read:** S3 uploads bucket — document text fetched again (PHI never passes through SFN execution state)  
+**Read:** Bedrock Prompt Management — doc-type-specific extraction prompt  
+**Read:** Bundled `schemas/{doc_type}_schema.json`  
+**Bedrock call:** `bedrock-runtime.converse()` — Claude Sonnet, forced tool use, `maxTokens=4096`, `temperature=0`
+
+**Next:** ValidateData
+
+#### State 3: ValidateData → `validator`
+
+**Read:** Bundled `schemas/{doc_type}_schema.json`  
+`jsonschema.validate()` — no AWS calls.
+
+**Next:** RenderSummary
 
 #### State 4: RenderSummary → `renderer` (experiment path)
 
@@ -372,6 +321,12 @@ Comparison SM execution input:
   "successful_n": 9
 }
 ```
+
+#### Error path: MarkJobFailed → `fail_handler`
+
+**Trigger:** Any `Catch` block; `ResultPath: "$.error"` preserves `job_id` at top level  
+**Write:** DynamoDB `jobs` table — `SET status = FAILED, error_message = ...` (truncated to 1000 chars)  
+**Next:** JobFailed (Fail terminal)
 
 ---
 
@@ -469,7 +424,7 @@ Evaluates `$.has_gold`:
 **Bedrock calls:** Titan embeddings for each summary + the reference, in parallel via `ThreadPoolExecutor`
 
 BERTScore via `allenai/scibert_scivocab_uncased`, 8 layers, CPU, `batch_size=8`.  
-Tokenizer capped at **512** tokens (higher than the API Gateway version's 256 because Step Functions timeout is 300s, not 29s — allows higher accuracy for longer texts).
+Tokenizer capped at **512** tokens (higher than the now-unused API Gateway version's 256 — Step Functions timeout is 300s, allowing higher accuracy for longer texts).
 
 **Output (merged as `$.gold_results`):**
 ```json
@@ -539,7 +494,7 @@ Prompt instructs Claude to write a 200–400 word Markdown analysis covering: in
 | Store | Key pattern | Written by | Read by | Retention |
 |-------|-------------|-----------|---------|-----------|
 | DynamoDB `jobs` | `job_id` (hash) | `api_presign` (PENDING), `experiment_starter` (PENDING+experiment fields), `pipeline_starter` (RUNNING), `renderer` (COMPLETED), `fail_handler` (FAILED) | `pipeline_starter`, `api_status`, `api_summary` | Quota records TTL at midnight; job records no TTL |
-| DynamoDB `experiments` | `experiment_id` (hash) | `experiment_starter` (PENDING), `renderer` (increments counters), `report_writer` (COMPLETED), `comparison_fail_handler` (COMPARISON_FAILED) | `summary_collector` | No TTL |
+| DynamoDB `experiments` | `experiment_id` (hash) | `experiment_starter` (PENDING), `renderer` (increments counters), `report_writer` (COMPLETED), `comparison_fail_handler` (COMPARISON_FAILED) | `summary_collector`, `api_experiment_status` | No TTL |
 | S3 uploads bucket | `uploads/{job_id}/{filename}` | Browser (presign POST) or `experiment_starter` (copy_object) | `pipeline_starter` (experiment context only), `classifier`, `extractor` | 30-day lifecycle expiry |
 | S3 summaries bucket | `summaries/{job_id}/summary.txt` | `renderer` | `api_summary` | 90-day lifecycle expiry |
 | S3 summaries bucket | `summaries/{job_id}/usage.json` | `renderer` | `api_summary` | 90-day lifecycle expiry |
@@ -547,22 +502,23 @@ Prompt instructs Claude to write a 200–400 word Markdown analysis covering: in
 | S3 summaries bucket | `experiments/{id}/config.json` | `experiment_starter` | — (informational) | 90-day lifecycle expiry |
 | S3 summaries bucket | `experiments/{id}/runs/{n}/summary.txt` | `renderer` | `variance_scorer`, `gold_scorer` | 90-day lifecycle expiry |
 | S3 summaries bucket | `experiments/{id}/runs/{n}/metadata.json` | `renderer` | `summary_collector` (first run only, for doc_type) | 90-day lifecycle expiry |
-| S3 summaries bucket | `experiments/{id}/report/comparison.json` | `report_writer` | External / caller | 90-day lifecycle expiry |
-| S3 summaries bucket | `experiments/{id}/report/narrative.md` | `report_writer` | External / caller | 90-day lifecycle expiry |
-| Browser memory | — | Browser (reference text, summaries collected via poll) | `gold_comparator` (via POST body) | Cleared on page unload |
-| Zip download | Local filesystem | JSZip (client-side, Flow A only) | User | Indefinite (local file) |
+| S3 summaries bucket | `experiments/{id}/report/comparison.json` | `report_writer` | `api_experiment_status`, zip download | 90-day lifecycle expiry |
+| S3 summaries bucket | `experiments/{id}/report/narrative.md` | `report_writer` | `api_experiment_status`, zip download | 90-day lifecycle expiry |
+| Browser memory | — | Browser (reference text read from reference file) | `experiment_starter` (sent as `gold_text` in POST body); zip builder | Cleared on page unload |
+| Zip download | Local filesystem | JSZip (client-side) | User | Indefinite (local file) |
 
 ---
 
 ## Key Architectural Differences Between the Two Flows
 
-| | Flow A (gold.html) | Flow B (experiment API) |
+| | Flow A (gold.html) | Flow B (direct API call) |
 |---|---|---|
-| Trigger | User clicks Run Test in browser | `POST /experiments` API call |
-| Document ingestion | Browser uploads via presigned POST | `experiment_starter` copies existing S3 object |
-| Comparison triggered by | Browser (after polling all jobs) | `renderer` (when `completed_n >= expected_n`) |
-| Comparison runs on | `gold_comparator` Lambda, API Gateway, 29s limit | Comparison state machine, 300s timeout |
-| BERTScore token limit | 256 (API Gateway constraint) | 512 (Step Functions constraint, more accurate) |
-| Results stored | Client-side zip download only | S3 + DynamoDB (persistent) |
-| State machine type | Pipeline: EXPRESS | Pipeline: EXPRESS; Comparison: STANDARD |
-| Failure visibility | Browser error message | DynamoDB `experiments.status = COMPARISON_FAILED` |
+| Trigger | User clicks Run Test in browser | `POST /experiments` with existing S3 key |
+| Document ingestion | Browser presign-uploads document; `experiment_starter` copies that S3 object N times | Caller provides `source_document_key`; `experiment_starter` copies it N times |
+| Side effect | One untracked "seed" pipeline run fires on upload (output not in experiment results) | None |
+| Comparison triggered by | `renderer` (when `completed_n >= expected_n`) | Same |
+| Comparison runs on | Comparison SM (STANDARD), 300s timeout | Same |
+| BERTScore token limit | 512 (`gold_scorer`, Step Functions constraint) | Same |
+| Results stored | S3 + DynamoDB + client-side zip auto-downloaded | S3 + DynamoDB |
+| Results accessed by | Browser polls `api_experiment_status` every 10s; zip triggered on completion | Caller polls `GET /experiments/{experimentId}` |
+| State machine types | Pipeline: EXPRESS; Comparison: STANDARD | Same |
