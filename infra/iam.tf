@@ -883,6 +883,28 @@ resource "aws_iam_role_policy" "sfn_comparison_logs" {
   })
 }
 
+# ── sfn pipeline: EventBridge managed-rule for .sync:2 nested SM waiting ───────
+# Step Functions creates a managed EventBridge rule to detect child execution
+# completion when using the startExecution.sync:2 service integration.
+
+resource "aws_iam_role_policy" "sfn_events_managed_rule" {
+  name = "eventbridge-managed-rule"
+  role = aws_iam_role.sfn.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "events:PutTargets",
+        "events:PutRule",
+        "events:DescribeRule",
+      ]
+      Resource = "arn:aws:events:${local.region}:${local.account_id}:rule/StepFunctionsGetEventsForStepFunctionsExecutionRule"
+    }]
+  })
+}
+
 # ── sfn pipeline: permission to invoke claim-validator sub-SM (.sync:2) ────────
 
 resource "aws_iam_role_policy" "sfn_pipeline_claim_validator" {
