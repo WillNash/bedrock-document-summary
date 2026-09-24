@@ -32,7 +32,10 @@ def lambda_handler(event, context):
         jobs_table = dynamodb.Table(jobs_table_name)
         job_response = jobs_table.get_item(
             Key={'job_id': job_id},
-            ProjectionExpression='experiment_id, run_number, extractor_model_id, temperature, #validate',
+            ProjectionExpression=(
+                'experiment_id, run_number, extractor_model_id, temperature, '
+                'doc_type, custom_prompt, custom_schema, #validate'
+            ),
             ExpressionAttributeNames={'#validate': 'validate'},
             ConsistentRead=True,
         )
@@ -56,6 +59,12 @@ def lambda_handler(event, context):
             execution_input['temperature'] = float(temperature)
         if job_item.get('validate'):
             execution_input['validate'] = True
+        if job_item.get('doc_type'):
+            execution_input['doc_type'] = job_item['doc_type']
+        if job_item.get('custom_prompt'):
+            execution_input['custom_prompt'] = job_item['custom_prompt']
+        if 'custom_schema' in job_item:
+            execution_input['custom_schema'] = job_item['custom_schema']
 
         try:
             sfn_client.start_execution(
