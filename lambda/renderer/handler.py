@@ -37,9 +37,27 @@ dynamodb = boto3.resource('dynamodb')
 sfn_client = boto3.client('stepfunctions')
 
 
+def _copy_claim_artifacts(job_id, run_prefix, summaries_bucket):
+    artifacts = [
+        (f'summaries/{job_id}/pre_render.txt', f'{run_prefix}/pre_render.txt', 'text/plain; charset=utf-8'),
+        (f'summaries/{job_id}/claims.json',     f'{run_prefix}/claims.json',    'application/json'),
+        (f'summaries/{job_id}/triage.json',     f'{run_prefix}/triage.json',    'application/json'),
+        (f'summaries/{job_id}/verdicts.json',   f'{run_prefix}/verdicts.json',  'application/json'),
+    ]
+    for src_key, dst_key, content_type in artifacts:
+        obj = s3_client.get_object(Bucket=summaries_bucket, Key=src_key)
+        s3_client.put_object(
+            Bucket=summaries_bucket,
+            Key=dst_key,
+            Body=obj['Body'].read(),
+            ContentType=content_type,
+        )
+
+
 def _write_experiment_outputs(event, summary_text, summaries_bucket, completed_at):
     experiment_id = event['experiment_id']
     run_number = int(event['run_number'])
+    job_id = event['job_id']
     run_prefix = f'experiments/{experiment_id}/runs/{run_number}'
 
     s3_client.put_object(
@@ -49,6 +67,10 @@ def _write_experiment_outputs(event, summary_text, summaries_bucket, completed_a
         ContentType='text/plain; charset=utf-8',
     )
 
+    claim_validation = event.get('claim_validation', {})
+    if claim_validation:
+        _copy_claim_artifacts(job_id, run_prefix, summaries_bucket)
+
     usage = event.get('usage_stats', {})
     classifier_stats = usage.get('classifier', {})
     extractor_stats = usage.get('extractor', {})
@@ -56,7 +78,7 @@ def _write_experiment_outputs(event, summary_text, summaries_bucket, completed_a
     metadata = {
         'experiment_id': experiment_id,
         'run_number': run_number,
-        'job_id': event['job_id'],
+        'job_id': job_id,
         'source_document_key': event['key'],
         'doc_type': event['doc_type'],
         'classification': {
@@ -78,6 +100,11 @@ def _write_experiment_outputs(event, summary_text, summaries_bucket, completed_a
         },
         'timestamp': completed_at,
     }
+
+    if claim_validation:
+        metadata['claim_validation'] = {
+            'stats': claim_validation.get('claim_stats', {}),
+        }
 
     s3_client.put_object(
         Bucket=summaries_bucket,
