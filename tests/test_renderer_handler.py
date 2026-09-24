@@ -76,8 +76,10 @@ VALIDATED_EXPERIMENT_EVENT = {
         },
     },
     'claim_validation': {
-        'validated_summary_key': 'summaries/job-rdr-2/validated_summary.txt',
-        'claim_stats': CLAIM_STATS,
+        'output': {
+            'validated_summary_key': 'summaries/job-rdr-2/validated_summary.txt',
+            'claim_stats': CLAIM_STATS,
+        },
     },
 }
 

@@ -67,7 +67,7 @@ def _write_experiment_outputs(event, summary_text, summaries_bucket, completed_a
         ContentType='text/plain; charset=utf-8',
     )
 
-    claim_validation = event.get('claim_validation', {})
+    claim_validation = event.get('claim_validation', {}).get('output', {})
     if claim_validation:
         _copy_claim_artifacts(job_id, run_prefix, summaries_bucket)
 
@@ -168,7 +168,7 @@ def lambda_handler(event, context):
     doc_type = event['doc_type']
     validated_data = event['validated_data']
 
-    validated_summary_key = event.get('claim_validation', {}).get('validated_summary_key')
+    validated_summary_key = event.get('claim_validation', {}).get('output', {}).get('validated_summary_key')
     if validated_summary_key:
         obj = s3_client.get_object(Bucket=os.environ['SUMMARIES_BUCKET'], Key=validated_summary_key)
         summary_text = obj['Body'].read().decode('utf-8')

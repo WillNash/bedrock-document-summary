@@ -102,8 +102,7 @@
         }
       },
       "ResultSelector": {
-        "validated_summary_key.$": "States.StringToJson($.Output).validated_summary_key",
-        "claim_stats.$": "States.StringToJson($.Output).claim_stats"
+        "output.$": "States.StringToJson($.Output)"
       },
       "ResultPath": "$.claim_validation",
       "Retry": [
