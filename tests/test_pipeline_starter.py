@@ -133,6 +133,49 @@ class TestExecutionAlreadyExists:
                 handler.lambda_handler(make_s3_event(), None)
 
 
+class TestValidateFlag:
+    def test_validate_flag_threaded_from_dynamodb(self):
+        mock_ddb, mock_table = make_ddb_mock()
+        mock_table.get_item.return_value = {'Item': {'validate': True}}
+        import json
+
+        with mock.patch.object(handler, 'sfn_client') as mock_sfn, \
+             mock.patch.object(handler, 'dynamodb', mock_ddb):
+
+            handler.lambda_handler(make_s3_event(), None)
+
+            call_kwargs = mock_sfn.start_execution.call_args[1]
+            payload = json.loads(call_kwargs['input'])
+            assert payload.get('validate') is True
+
+    def test_validate_reserved_word_alias_used(self):
+        mock_ddb, mock_table = make_ddb_mock()
+
+        with mock.patch.object(handler, 'sfn_client'), \
+             mock.patch.object(handler, 'dynamodb', mock_ddb):
+
+            handler.lambda_handler(make_s3_event(), None)
+
+            get_item_kwargs = mock_table.get_item.call_args[1]
+            assert 'ExpressionAttributeNames' in get_item_kwargs
+            assert get_item_kwargs['ExpressionAttributeNames'].get('#validate') == 'validate'
+            assert '#validate' in get_item_kwargs['ProjectionExpression']
+
+    def test_validate_absent_from_dynamodb_not_in_sfn_input(self):
+        mock_ddb, mock_table = make_ddb_mock()
+        mock_table.get_item.return_value = {'Item': {}}
+        import json
+
+        with mock.patch.object(handler, 'sfn_client') as mock_sfn, \
+             mock.patch.object(handler, 'dynamodb', mock_ddb):
+
+            handler.lambda_handler(make_s3_event(), None)
+
+            call_kwargs = mock_sfn.start_execution.call_args[1]
+            payload = json.loads(call_kwargs['input'])
+            assert 'validate' not in payload
+
+
 class TestConditionalStatusUpdate:
     def test_conditional_check_failure_suppressed(self):
         mock_ddb, mock_table = make_ddb_mock()

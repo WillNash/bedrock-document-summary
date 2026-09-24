@@ -19,9 +19,13 @@ locals {
     "report-generator",
     "report-writer",
     "comparison-fail-handler",
+    "claim-extractor",
+    "claim-triager",
+    "claim-assessor",
+    "summary-assembler",
   ]
 
-  sfn_names = ["pipeline", "comparison"]
+  sfn_names = ["pipeline", "comparison", "claim-validator"]
 }
 
 resource "aws_cloudwatch_log_group" "lambda" {

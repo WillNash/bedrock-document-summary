@@ -56,6 +56,7 @@ def lambda_handler(event, context):
     filename = body.get('filename', 'document.txt')
     # Sanitize filename: strip path components
     filename = Path(filename).name or 'document.txt'
+    validate = bool(body.get('validate', False))
 
     upload_bucket = os.environ['UPLOAD_BUCKET']
     jobs_table = os.environ['JOBS_TABLE']
@@ -81,6 +82,7 @@ def lambda_handler(event, context):
         'status': 'PENDING',
         'created_at': datetime.now(timezone.utc).isoformat(),
         'filename': filename,
+        'validate': validate,
     })
 
     s3_key = f'uploads/{job_id}/{filename}'

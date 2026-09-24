@@ -108,6 +108,26 @@ class TestPresignedUrl:
         assert body['presign_url'] == 'https://bucket.s3.amazonaws.com'
         assert 'presign_fields' in body
 
+    def test_validate_flag_written_to_dynamodb(self):
+        with mock.patch.object(handler, 'dynamodb') as mock_ddb, \
+             mock.patch.object(handler, 's3_client') as mock_s3:
+
+            mock_table = mock.MagicMock()
+            mock_ddb.Table.return_value = mock_table
+            mock_s3.generate_presigned_post.return_value = {
+                'url': 'https://bucket.s3.amazonaws.com',
+                'fields': {},
+            }
+            event = {
+                'requestContext': {'authorizer': {'jwt': {'claims': {'sub': 'user-abc'}}}},
+                'body': json.dumps({'filename': 'test.pdf', 'validate': True}),
+            }
+
+            handler.lambda_handler(event, None)
+
+            call_kwargs = mock_table.put_item.call_args[1]
+            assert call_kwargs['Item']['validate'] is True
+
     def test_filename_path_components_stripped(self):
         with mock.patch.object(handler, 'dynamodb') as mock_ddb, \
              mock.patch.object(handler, 's3_client') as mock_s3:

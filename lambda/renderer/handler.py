@@ -141,8 +141,13 @@ def lambda_handler(event, context):
     doc_type = event['doc_type']
     validated_data = event['validated_data']
 
-    template = jinja_env.get_template(TEMPLATE_FILES[doc_type])
-    summary_text = template.render(**validated_data)
+    validated_summary_key = event.get('claim_validation', {}).get('validated_summary_key')
+    if validated_summary_key:
+        obj = s3_client.get_object(Bucket=os.environ['SUMMARIES_BUCKET'], Key=validated_summary_key)
+        summary_text = obj['Body'].read().decode('utf-8')
+    else:
+        template = jinja_env.get_template(TEMPLATE_FILES[doc_type])
+        summary_text = template.render(**validated_data)
 
     summaries_bucket = os.environ['SUMMARIES_BUCKET']
     summary_key = f'summaries/{job_id}/summary.txt'
