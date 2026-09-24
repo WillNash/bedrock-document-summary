@@ -13,6 +13,11 @@ resource "aws_sfn_state_machine" "pipeline" {
     claim_validator_sm_arn  = aws_sfn_state_machine.claim_validator.arn
   })
 
+  depends_on = [
+    aws_iam_role_policy.sfn_events_managed_rule,
+    aws_iam_role_policy.sfn_pipeline_claim_validator,
+  ]
+
   logging_configuration {
     log_destination        = "${aws_cloudwatch_log_group.step_functions["pipeline"].arn}:*"
     include_execution_data = false # intentionally false — execution input contains PHI document content
