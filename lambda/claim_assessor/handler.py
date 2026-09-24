@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+from typing import Any
 
 import boto3
 
@@ -30,14 +31,14 @@ VERDICT_SYSTEM = (
 )
 
 
-def _needs_escalation(verdict_record):
+def _needs_escalation(verdict_record: dict[str, Any]) -> bool:
     return (
         verdict_record.get('verdict') == 'contradicted'
         or verdict_record.get('top_passage_similarity', 1.0) < TRIAGE_THRESHOLD
     )
 
 
-def _reassess(verdict_record):
+def _reassess(verdict_record: dict[str, Any]) -> dict[str, Any]:
     claim = verdict_record['claim']
     passages_text = '\n\n'.join(f'[Passage]: {p}' for p in verdict_record.get('top_passages', []))
     user_msg = f'Claim: {claim}\n\nSource passages:\n{passages_text}'
@@ -51,6 +52,7 @@ def _reassess(verdict_record):
     try:
         updated = json.loads(raw)
     except json.JSONDecodeError:
+        logger.warning(json.dumps({'action': 'assessment_parse_error', 'claim': claim, 'raw_prefix': raw[:200]}))
         updated = {'verdict': 'unverifiable', 'evidence_quote': '', 'reason': 'parse_error'}
 
     updated['claim'] = claim
@@ -59,7 +61,7 @@ def _reassess(verdict_record):
     return updated
 
 
-def lambda_handler(event, context):
+def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     job_id = event['job_id']
     triage_key = event['triage_key']
 

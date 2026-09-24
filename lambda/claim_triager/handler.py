@@ -2,6 +2,7 @@ import json
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 import boto3
 
@@ -20,6 +21,7 @@ TRIAGE_THRESHOLD = float(os.environ.get('TRIAGE_SIMILARITY_THRESHOLD', '0.55'))
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 500
 TOP_K = 3
+_EMBED_WORKERS = 8
 
 VERDICT_SYSTEM = (
     "You are a strict medical claim verifier. Given a claim and passages from the source "
@@ -34,7 +36,7 @@ VERDICT_SYSTEM = (
 )
 
 
-def _embed(text):
+def _embed(text: str) -> list[float]:
     response = bedrock_runtime.invoke_model(
         modelId=EMBEDDING_MODEL_ID,
         body=json.dumps({'inputText': text, 'dimensions': 1024, 'normalize': True}),
@@ -42,11 +44,11 @@ def _embed(text):
     return json.loads(response['body'].read())['embedding']
 
 
-def _dot(a, b):
+def _dot(a: list[float], b: list[float]) -> float:
     return sum(x * y for x, y in zip(a, b))
 
 
-def _chunk_text(text):
+def _chunk_text(text: str) -> list[str]:
     chunks = []
     start = 0
     while start < len(text):
@@ -58,7 +60,7 @@ def _chunk_text(text):
     return [c for c in chunks if c.strip()]
 
 
-def _triage_claim(claim, passage_texts, passage_embeddings):
+def _triage_claim(claim: str, passage_texts: list[str], passage_embeddings: list[list[float]]) -> dict[str, Any]:
     claim_emb = _embed(claim)
     scores = [(_dot(claim_emb, p_emb), p_text) for p_emb, p_text in zip(passage_embeddings, passage_texts)]
     scores.sort(key=lambda x: x[0], reverse=True)
@@ -77,6 +79,7 @@ def _triage_claim(claim, passage_texts, passage_embeddings):
     try:
         verdict = json.loads(raw)
     except json.JSONDecodeError:
+        logger.warning(json.dumps({'action': 'triage_parse_error', 'claim': claim, 'raw_prefix': raw[:200]}))
         verdict = {'verdict': 'unverifiable', 'evidence_quote': '', 'reason': 'parse_error'}
 
     verdict['claim'] = claim
@@ -85,7 +88,7 @@ def _triage_claim(claim, passage_texts, passage_embeddings):
     return verdict
 
 
-def lambda_handler(event, context):
+def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     job_id = event['job_id']
     source_bucket = event['bucket']
     source_key = event['key']
@@ -109,7 +112,7 @@ def lambda_handler(event, context):
 
     passages = _chunk_text(source_text)
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    with ThreadPoolExecutor(max_workers=_EMBED_WORKERS) as pool:
         passage_embeddings = list(pool.map(_embed, passages))
 
     verdicts = [_triage_claim(claim, passages, passage_embeddings) for claim in claims]

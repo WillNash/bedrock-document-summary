@@ -4,6 +4,7 @@ import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any
 
 import boto3
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
@@ -35,6 +36,7 @@ UPLOAD_BUCKET = os.environ['UPLOAD_BUCKET']
 SUMMARIES_BUCKET = os.environ['SUMMARIES_BUCKET']
 DEDUP_THRESHOLD = float(os.environ.get('DEDUP_SIMILARITY_THRESHOLD', '0.90'))
 CLAIM_CAP = 40
+_EMBED_WORKERS = 8
 
 EXTRACTION_SYSTEM = (
     "You are a medical claim analyst. For the sentence between <SOS> and <EOS>, "
@@ -46,7 +48,7 @@ EXTRACTION_SYSTEM = (
 )
 
 
-def _embed(text):
+def _embed(text: str) -> list[float]:
     response = bedrock_runtime.invoke_model(
         modelId=EMBEDDING_MODEL_ID,
         body=json.dumps({'inputText': text, 'dimensions': 1024, 'normalize': True}),
@@ -54,16 +56,16 @@ def _embed(text):
     return json.loads(response['body'].read())['embedding']
 
 
-def _dot(a, b):
+def _dot(a: list[float], b: list[float]) -> float:
     return sum(x * y for x, y in zip(a, b))
 
 
-def _split_sentences(text):
-    sentences = re.split(r'(?<=[.!?])\s+|\n+', text)
+def _split_sentences(text: str) -> list[str]:
+    sentences = re.split(r'(?<=[.!?]) +', text)
     return [s.strip() for s in sentences if s.strip()]
 
 
-def _extract_claim(sentence, context_before, context_after):
+def _extract_claim(sentence: str, context_before: list[str], context_after: list[str]) -> dict[str, Any] | None:
     context1 = ' '.join(context_before[-3:]) if context_before else ''
     context2 = context_after[0] if context_after else ''
     window = f'{context1} <SOS>{sentence}<EOS> {context2}'.strip()
@@ -78,10 +80,11 @@ def _extract_claim(sentence, context_before, context_after):
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
+        logger.warning(json.dumps({'action': 'claim_parse_error', 'raw_prefix': raw[:200]}))
         return None
 
 
-def lambda_handler(event, context):
+def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     job_id = event['job_id']
     doc_type = event['doc_type']
     validated_data = event['validated_data']
@@ -126,7 +129,7 @@ def lambda_handler(event, context):
             'claims_key': claims_key,
         }
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    with ThreadPoolExecutor(max_workers=_EMBED_WORKERS) as pool:
         embeddings = list(pool.map(_embed, verifiable_claims))
 
     accepted_claims = []

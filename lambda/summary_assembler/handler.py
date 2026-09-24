@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+from typing import Any
 
 import boto3
 
@@ -33,22 +34,27 @@ Return the corrected summary only.\
 """
 
 HEDGING_PROMPT = """\
-The following sentence from a medical summary is unverifiable against the source document \
-(no supporting passage was found). Rewrite this single sentence to hedge the claim using \
-language like "the document states" or "reportedly". Do not add any new information. \
-Do not change any other part of the summary.
+The following medical summary contains a sentence that is unverifiable against the source \
+document (no supporting passage was found). Rewrite the summary with that sentence hedged \
+using language like "the document states" or "reportedly". Do not add any new information. \
+Do not change any other sentence.
+
+Full summary:
+<summary>{summary}</summary>
 
 Sentence to hedge:
 {sentence}
 
-Return the rewritten sentence only.\
+Return the complete corrected summary only.\
 """
 
 SPAN_REPLACEMENT_PROMPT = """\
-The following sentence from a medical summary contradicts the source document. \
-Rewrite this single sentence using ONLY the quoted evidence below. \
-Do not add any information not present in the evidence. \
-Do not change any other part of the summary.
+The following medical summary contains a sentence that contradicts the source document. \
+Rewrite the summary with that sentence corrected using ONLY the quoted evidence below. \
+Do not add any information not present in the evidence. Do not change any other sentence.
+
+Full summary:
+<summary>{summary}</summary>
 
 Sentence to correct:
 {sentence}
@@ -56,11 +62,11 @@ Sentence to correct:
 Quoted evidence from source:
 {evidence_quote}
 
-Return the rewritten sentence only.\
+Return the complete corrected summary only.\
 """
 
 
-def _call_sonnet(prompt):
+def _call_sonnet(prompt: str) -> str:
     response = bedrock_runtime.converse(
         modelId=EXPENSIVE_MODEL_ID,
         messages=[{'role': 'user', 'content': [{'text': prompt}]}],
@@ -69,7 +75,7 @@ def _call_sonnet(prompt):
     return response['output']['message']['content'][0]['text'].strip()
 
 
-def lambda_handler(event, context):
+def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     job_id = event['job_id']
     verdicts_key = event['verdicts_key']
     summary_key = event['summary_key']
@@ -102,14 +108,14 @@ def lambda_handler(event, context):
         for verdict in bad_verdicts:
             claim = verdict['claim']
             if verdict['verdict'] == 'unverifiable':
-                prompt = HEDGING_PROMPT.format(sentence=claim)
+                prompt = HEDGING_PROMPT.format(summary=corrected_text, sentence=claim)
             else:
                 prompt = SPAN_REPLACEMENT_PROMPT.format(
+                    summary=corrected_text,
                     sentence=claim,
                     evidence_quote=verdict.get('evidence_quote', ''),
                 )
-            rewritten = _call_sonnet(prompt)
-            corrected_text = corrected_text.replace(claim, rewritten, 1)
+            corrected_text = _call_sonnet(prompt)
 
     validated_summary_key = f'summaries/{job_id}/validated_summary.txt'
     s3_client.put_object(
