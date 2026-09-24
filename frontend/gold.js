@@ -636,6 +636,10 @@ async function runGoldTest() {
     if (modelInput) config.extractor_model_id = modelInput;
     config.temperature = Number.isFinite(temperatureInput) ? temperatureInput : 0;
 
+    if (document.getElementById('validate-checkbox').checked) {
+      config.validate = true;
+    }
+
     const docTypeVal = document.getElementById('doc-type-select').value;
     if (docTypeVal) {
       config.doc_type = docTypeVal;
