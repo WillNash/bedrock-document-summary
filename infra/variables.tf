@@ -138,8 +138,8 @@ variable "guardrail_version" {
 
 variable "bedrock_claim_cheap_model_id" {
   type        = string
-  description = "Bedrock geo inference profile ID for cheap claim-validation steps (claim extraction and triage). Must use au., us., eu., jp., or global. prefix."
-  default     = "au.anthropic.claude-haiku-4-5-20251001-v1:0"
+  description = "Bedrock geo inference profile ID for cheap claim-validation steps (claim extraction and triage). Must use us., eu., au., jp., or global. prefix."
+  default     = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
   validation {
     condition     = can(regex("^(us\\.|eu\\.|au\\.|jp\\.|global\\.)", var.bedrock_claim_cheap_model_id))
@@ -149,8 +149,8 @@ variable "bedrock_claim_cheap_model_id" {
 
 variable "bedrock_claim_expensive_model_id" {
   type        = string
-  description = "Bedrock geo inference profile ID for expensive claim-validation steps (deep assessment and summary assembly). Must use au., us., eu., jp., or global. prefix."
-  default     = "au.anthropic.claude-sonnet-4-6"
+  description = "Bedrock geo inference profile ID for expensive claim-validation steps (deep assessment and summary assembly). Must use us., eu., au., jp., or global. prefix."
+  default     = "us.anthropic.claude-sonnet-4-6"
 
   validation {
     condition     = can(regex("^(us\\.|eu\\.|au\\.|jp\\.|global\\.)", var.bedrock_claim_expensive_model_id))

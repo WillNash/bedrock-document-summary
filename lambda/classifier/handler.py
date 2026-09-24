@@ -80,6 +80,7 @@ def lambda_handler(event, context):
         'run_number': event.get('run_number'),
         'extractor_model_id': event.get('extractor_model_id'),
         'temperature': event.get('temperature'),
+        'validate': event.get('validate', False),
         'usage_stats': {
             'classifier': {
                 'model': model_id,

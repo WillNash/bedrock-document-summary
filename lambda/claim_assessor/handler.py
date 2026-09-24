@@ -37,9 +37,10 @@ def _needs_escalation(verdict_record):
     )
 
 
-def _reassess(verdict_record, source_text):
+def _reassess(verdict_record):
     claim = verdict_record['claim']
-    user_msg = f'Claim: {claim}\n\nSource document:\n{source_text[:8000]}'
+    passages_text = '\n\n'.join(f'[Passage]: {p}' for p in verdict_record.get('top_passages', []))
+    user_msg = f'Claim: {claim}\n\nSource passages:\n{passages_text}'
     response = bedrock_runtime.converse(
         modelId=EXPENSIVE_MODEL_ID,
         system=[{'text': VERDICT_SYSTEM}],
@@ -60,8 +61,6 @@ def _reassess(verdict_record, source_text):
 
 def lambda_handler(event, context):
     job_id = event['job_id']
-    source_bucket = event['bucket']
-    source_key = event['key']
     triage_key = event['triage_key']
 
     triage_obj = s3_client.get_object(Bucket=SUMMARIES_BUCKET, Key=triage_key)
@@ -69,12 +68,8 @@ def lambda_handler(event, context):
 
     escalated_indices = [i for i, v in enumerate(verdicts) if _needs_escalation(v)]
 
-    if escalated_indices:
-        source_obj = s3_client.get_object(Bucket=source_bucket, Key=source_key)
-        source_text = source_obj['Body'].read().decode('utf-8')
-
-        for i in escalated_indices:
-            verdicts[i] = _reassess(verdicts[i], source_text)
+    for i in escalated_indices:
+        verdicts[i] = _reassess(verdicts[i])
 
     verdicts_key = f'summaries/{job_id}/verdicts.json'
     s3_client.put_object(

@@ -99,9 +99,6 @@ def lambda_handler(event, context):
         ContentType='text/plain; charset=utf-8',
     )
 
-    source_obj = s3_client.get_object(Bucket=source_bucket, Key=source_key)
-    source_text = source_obj['Body'].read().decode('utf-8')  # noqa: F841 (available for future use)
-
     sentences = _split_sentences(summary_text)
     verifiable_claims = []
 

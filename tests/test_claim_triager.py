@@ -92,6 +92,24 @@ class TestClaimTriager:
             assert 'top_passage_similarity' in v
             assert isinstance(v['top_passage_similarity'], float)
 
+    def test_top_passages_written_to_triage(self):
+        bedrock = _make_bedrock_mock()
+        s3 = _make_s3_mock()
+
+        with mock.patch.object(claim_triager_handler, 'bedrock_runtime', bedrock), \
+             mock.patch.object(claim_triager_handler, 's3_client', s3):
+            claim_triager_handler.lambda_handler(BASE_EVENT, None)
+
+        triage_call = next(
+            c for c in s3.put_object.call_args_list
+            if 'triage.json' in c.kwargs['Key']
+        )
+        verdicts = json.loads(triage_call.kwargs['Body'])
+        for v in verdicts:
+            assert 'top_passages' in v
+            assert isinstance(v['top_passages'], list)
+            assert len(v['top_passages']) > 0
+
     def test_source_chunked_correctly(self):
         source_text = 'A' * 2000
         bedrock = _make_bedrock_mock()

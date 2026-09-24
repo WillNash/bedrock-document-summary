@@ -81,6 +81,7 @@ def _triage_claim(claim, passage_texts, passage_embeddings):
 
     verdict['claim'] = claim
     verdict['top_passage_similarity'] = top_similarity
+    verdict['top_passages'] = [p for _, p in top]
     return verdict
 
 
