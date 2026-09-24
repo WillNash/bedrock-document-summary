@@ -111,6 +111,42 @@ data "archive_file" "renderer" {
   }
 }
 
+data "archive_file" "claim_extractor" {
+  type        = "zip"
+  output_path = "${path.module}/lambda_packages/claim_extractor.zip"
+
+  source {
+    content  = file("${path.module}/../lambda/claim_extractor/handler.py")
+    filename = "handler.py"
+  }
+
+  dynamic "source" {
+    for_each = local.extraction_doc_types
+    content {
+      content  = file("${path.module}/../templates/${source.value}.j2")
+      filename = "templates/${source.value}.j2"
+    }
+  }
+}
+
+data "archive_file" "claim_triager" {
+  type        = "zip"
+  source_dir  = "${path.module}/../lambda/claim_triager"
+  output_path = "${path.module}/lambda_packages/claim_triager.zip"
+}
+
+data "archive_file" "claim_assessor" {
+  type        = "zip"
+  source_dir  = "${path.module}/../lambda/claim_assessor"
+  output_path = "${path.module}/lambda_packages/claim_assessor.zip"
+}
+
+data "archive_file" "summary_assembler" {
+  type        = "zip"
+  source_dir  = "${path.module}/../lambda/summary_assembler"
+  output_path = "${path.module}/lambda_packages/summary_assembler.zip"
+}
+
 data "archive_file" "comparator" {
   type        = "zip"
   source_dir  = "${path.module}/../lambda/comparator"
@@ -416,6 +452,139 @@ resource "aws_lambda_function" "renderer" {
 
   tags = local.common_tags
 
+  depends_on = [aws_cloudwatch_log_group.lambda]
+}
+
+resource "aws_lambda_function" "claim_extractor" {
+  function_name    = "${local.name_prefix}-claim-extractor"
+  filename         = data.archive_file.claim_extractor.output_path
+  source_code_hash = data.archive_file.claim_extractor.output_base64sha256
+  handler          = "handler.lambda_handler"
+  runtime          = "python3.12"
+  architectures    = ["arm64"]
+  role             = aws_iam_role.claim_validator_processing.arn
+  timeout          = 120
+  memory_size      = 512
+  layers           = [aws_lambda_layer_version.deps.arn]
+
+  environment {
+    variables = {
+      UPLOAD_BUCKET              = aws_s3_bucket.uploads.bucket
+      SUMMARIES_BUCKET           = aws_s3_bucket.summaries.bucket
+      CHEAP_MODEL_ID             = var.bedrock_claim_cheap_model_id
+      EMBEDDING_MODEL_ID         = "amazon.titan-embed-text-v2:0"
+      DEDUP_SIMILARITY_THRESHOLD = "0.90"
+    }
+  }
+
+  tracing_config {
+    mode = "Active"
+  }
+
+  logging_config {
+    log_format = "JSON"
+    log_group  = aws_cloudwatch_log_group.lambda["claim-extractor"].name
+  }
+
+  tags       = local.common_tags
+  depends_on = [aws_cloudwatch_log_group.lambda]
+}
+
+resource "aws_lambda_function" "claim_triager" {
+  function_name    = "${local.name_prefix}-claim-triager"
+  filename         = data.archive_file.claim_triager.output_path
+  source_code_hash = data.archive_file.claim_triager.output_base64sha256
+  handler          = "handler.lambda_handler"
+  runtime          = "python3.12"
+  architectures    = ["arm64"]
+  role             = aws_iam_role.claim_validator_processing.arn
+  timeout          = 120
+  memory_size      = 512
+
+  environment {
+    variables = {
+      UPLOAD_BUCKET              = aws_s3_bucket.uploads.bucket
+      SUMMARIES_BUCKET           = aws_s3_bucket.summaries.bucket
+      CHEAP_MODEL_ID             = var.bedrock_claim_cheap_model_id
+      EMBEDDING_MODEL_ID         = "amazon.titan-embed-text-v2:0"
+      TRIAGE_SIMILARITY_THRESHOLD = "0.55"
+    }
+  }
+
+  tracing_config {
+    mode = "Active"
+  }
+
+  logging_config {
+    log_format = "JSON"
+    log_group  = aws_cloudwatch_log_group.lambda["claim-triager"].name
+  }
+
+  tags       = local.common_tags
+  depends_on = [aws_cloudwatch_log_group.lambda]
+}
+
+resource "aws_lambda_function" "claim_assessor" {
+  function_name    = "${local.name_prefix}-claim-assessor"
+  filename         = data.archive_file.claim_assessor.output_path
+  source_code_hash = data.archive_file.claim_assessor.output_base64sha256
+  handler          = "handler.lambda_handler"
+  runtime          = "python3.12"
+  architectures    = ["arm64"]
+  role             = aws_iam_role.claim_validator_processing.arn
+  timeout          = 120
+  memory_size      = 512
+
+  environment {
+    variables = {
+      SUMMARIES_BUCKET            = aws_s3_bucket.summaries.bucket
+      CHEAP_MODEL_ID              = var.bedrock_claim_cheap_model_id
+      EXPENSIVE_MODEL_ID          = var.bedrock_claim_expensive_model_id
+      TRIAGE_SIMILARITY_THRESHOLD = "0.55"
+    }
+  }
+
+  tracing_config {
+    mode = "Active"
+  }
+
+  logging_config {
+    log_format = "JSON"
+    log_group  = aws_cloudwatch_log_group.lambda["claim-assessor"].name
+  }
+
+  tags       = local.common_tags
+  depends_on = [aws_cloudwatch_log_group.lambda]
+}
+
+resource "aws_lambda_function" "summary_assembler" {
+  function_name    = "${local.name_prefix}-summary-assembler"
+  filename         = data.archive_file.summary_assembler.output_path
+  source_code_hash = data.archive_file.summary_assembler.output_base64sha256
+  handler          = "handler.lambda_handler"
+  runtime          = "python3.12"
+  architectures    = ["arm64"]
+  role             = aws_iam_role.claim_validator_processing.arn
+  timeout          = 120
+  memory_size      = 512
+
+  environment {
+    variables = {
+      SUMMARIES_BUCKET   = aws_s3_bucket.summaries.bucket
+      EXPENSIVE_MODEL_ID = var.bedrock_claim_expensive_model_id
+    }
+  }
+
+  tracing_config {
+    mode = "Active"
+  }
+
+  logging_config {
+    log_format = "JSON"
+    log_group  = aws_cloudwatch_log_group.lambda["summary-assembler"].name
+  }
+
+  tags       = local.common_tags
   depends_on = [aws_cloudwatch_log_group.lambda]
 }
 

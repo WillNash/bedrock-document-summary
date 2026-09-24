@@ -75,6 +75,53 @@
           "ResultPath": "$.error"
         }
       ],
+      "Next": "CheckValidateFlag"
+    },
+    "CheckValidateFlag": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.validate",
+          "BooleanEquals": true,
+          "Next": "RunClaimValidator"
+        }
+      ],
+      "Default": "RenderSummary"
+    },
+    "RunClaimValidator": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn": "${claim_validator_sm_arn}",
+        "Input": {
+          "job_id.$": "$.job_id",
+          "bucket.$": "$.bucket",
+          "key.$": "$.key",
+          "doc_type.$": "$.doc_type",
+          "validated_data.$": "$.validated_data"
+        }
+      },
+      "ResultSelector": {
+        "output.$": "States.StringToJson($.Output)"
+      },
+      "ResultPath": "$.claim_validation",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 1,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "MarkJobFailed",
+          "ResultPath": "$.error"
+        }
+      ],
       "Next": "RenderSummary"
     },
     "RenderSummary": {

@@ -1,6 +1,193 @@
 /* global APP_CONFIG, JSZip */
 'use strict';
 
+// ── Embedded schemas and prompts ──────────────────────────────────────────────
+
+const DOC_TYPES = {
+  lab_result: {
+    prompt: `You are a clinical data extraction assistant specializing in laboratory results. Your task is to extract all relevant information from the provided lab result document and populate the provided tool schema precisely.
+
+Guidelines:
+- Extract values exactly as they appear in the document. Do not interpret, normalize, or convert values.
+- Use null for any field that is genuinely absent from the document. Do not invent or infer missing values.
+- For test results, capture all panels and individual results present in the document.
+- Preserve the original units as written (e.g., "mg/dL", "mmol/L", "g/dL").
+- For reference ranges, extract the full range string as written (e.g., "3.5-5.0", ">60").
+- For flags, use the flag annotation from the document (e.g., "H", "L", "HIGH", "LOW", "CRITICAL", or null if not flagged).
+- The interpretation field should capture the overall lab interpretation or pathologist comment if present.
+- Do not include information that is not present in the source document.`,
+    schema: `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "LabResult",
+  "type": "object",
+  "required": ["patient_id", "test_date", "ordering_provider", "test_panels"],
+  "properties": {
+    "patient_id": { "type": "string" },
+    "test_date": { "type": "string", "format": "date" },
+    "ordering_provider": { "type": "string" },
+    "test_panels": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["panel_name", "results"],
+        "properties": {
+          "panel_name": { "type": "string" },
+          "results": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": ["name", "value", "unit"],
+              "properties": {
+                "name": { "type": "string" },
+                "value": { "type": "string" },
+                "unit": { "type": ["string", "null"] },
+                "reference_range": { "type": ["string", "null"] },
+                "flag": { "type": ["string", "null"] }
+              }
+            }
+          }
+        }
+      }
+    },
+    "interpretation": { "type": ["string", "null"] },
+    "notes": { "type": ["string", "null"] }
+  },
+  "additionalProperties": false
+}`,
+  },
+  doctors_notes: {
+    prompt: `You are a clinical data extraction assistant specializing in physician notes. Your task is to extract all relevant information from the provided clinical note and populate the provided tool schema precisely.
+
+Guidelines:
+- Extract information as it appears in the source document. Do not paraphrase or interpret beyond what is written.
+- Use null for any field genuinely absent from the note. Do not infer or fabricate missing clinical information.
+- chief_complaint: the patient's primary reason for the visit, in their words or as documented.
+- history_of_present_illness: the narrative description of the current illness or complaint.
+- physical_exam_findings: objective findings from the physical examination.
+- assessment: the clinician's diagnostic impressions or diagnoses.
+- plan: the treatment plan, including orders, referrals, and instructions.
+- medications_changed: only medications explicitly added, changed, or discontinued during this visit. Use null if no changes were made.
+- follow_up: the documented follow-up instructions or return visit timeline. Use null if not specified.
+- Do not include information not present in the source document.`,
+    schema: `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DoctorsNotes",
+  "type": "object",
+  "required": ["patient_id", "visit_date", "provider", "chief_complaint", "history_of_present_illness", "physical_exam_findings", "assessment", "plan"],
+  "properties": {
+    "patient_id": { "type": "string" },
+    "visit_date": { "type": "string", "format": "date" },
+    "provider": { "type": "string" },
+    "chief_complaint": { "type": "string" },
+    "history_of_present_illness": { "type": "string" },
+    "physical_exam_findings": { "type": "string" },
+    "assessment": { "type": "string" },
+    "plan": { "type": "string" },
+    "medications_changed": { "type": ["array", "null"], "items": { "type": "string" } },
+    "follow_up": { "type": ["string", "null"] }
+  },
+  "additionalProperties": false
+}`,
+  },
+  injury_doc: {
+    prompt: `You are a clinical data extraction assistant specializing in injury documentation. Your task is to extract all relevant information from the provided injury document and populate the provided tool schema precisely.
+
+Guidelines:
+- Extract information as it appears in the source document. Do not interpret or embellish.
+- Use null for any field genuinely absent from the document.
+- incident_date: the date the injury occurred, in ISO 8601 format (YYYY-MM-DD) if determinable, otherwise as written.
+- body_regions_affected: list all anatomical regions mentioned as injured or affected.
+- mechanism_of_injury: how the injury occurred (e.g., "fall from height", "motor vehicle accident", "repetitive strain").
+- severity: must be exactly one of: "minor", "moderate", or "severe". Infer from clinical language if not explicitly stated.
+- imaging_findings: any radiological or imaging results described. Use null if no imaging was performed or documented.
+- treatment_plan: the documented treatment approach, interventions, or management plan.
+- work_status: any documentation of the patient's work capacity or restrictions. Use null if not addressed.
+- Do not include information not present in the source document.`,
+    schema: `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "InjuryDoc",
+  "type": "object",
+  "required": ["patient_id", "incident_date", "body_regions_affected", "mechanism_of_injury", "severity", "treatment_plan"],
+  "properties": {
+    "patient_id": { "type": "string" },
+    "incident_date": { "type": "string", "format": "date" },
+    "body_regions_affected": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+    "mechanism_of_injury": { "type": "string" },
+    "severity": { "type": "string", "enum": ["minor", "moderate", "severe"] },
+    "imaging_findings": { "type": ["string", "null"] },
+    "treatment_plan": { "type": "string" },
+    "work_status": { "type": ["string", "null"] },
+    "notes": { "type": ["string", "null"] }
+  },
+  "additionalProperties": false
+}`,
+  },
+  visit_assessment: {
+    prompt: `You are a clinical data extraction assistant specializing in visit assessments and therapy notes. Your task is to extract all relevant information from the provided assessment document and populate the provided tool schema precisely.
+
+Guidelines:
+- Extract information as it appears in the source document. Do not interpret or add clinical judgment.
+- Use null for any field genuinely absent from the document.
+- visit_type: classify as one of "initial", "follow_up", "discharge", or "telehealth". Infer from context if not explicitly stated.
+- functional_status: the patient's documented functional abilities, limitations, or activity level.
+- pain_score: the numeric pain rating (0-10) if documented. Use null if no pain score is recorded.
+- goals_progress: the documented progress toward established treatment goals.
+- barriers: any documented barriers to recovery, treatment compliance, or goal achievement. Use null if none documented.
+- plan_updates: any modifications to the treatment plan, goals, or next steps documented in this visit.
+- Do not include information not present in the source document.`,
+    schema: `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "VisitAssessment",
+  "type": "object",
+  "required": ["patient_id", "visit_date", "visit_type", "functional_status", "goals_progress", "plan_updates"],
+  "properties": {
+    "patient_id": { "type": "string" },
+    "visit_date": { "type": "string", "format": "date" },
+    "visit_type": { "type": "string", "enum": ["initial", "follow_up", "discharge", "telehealth"] },
+    "functional_status": { "type": "string" },
+    "pain_score": { "type": ["integer", "null"], "minimum": 0, "maximum": 10 },
+    "goals_progress": { "type": "string" },
+    "barriers": { "type": ["string", "null"] },
+    "plan_updates": { "type": "string" }
+  },
+  "additionalProperties": false
+}`,
+  },
+  psych_eval: {
+    prompt: `You are a clinical data extraction assistant specializing in psychiatric and psychological evaluations. Your task is to extract information from the provided evaluation document and populate the provided tool schema.
+
+Guidelines:
+- Extract structured fields (patient_id, eval_date, evaluator) exactly as they appear.
+- Use null for structured fields genuinely absent from the document.
+- For narrative fields (mental_status_summary, diagnostic_impressions, recommendations), synthesize the relevant content from the document into coherent clinical prose. These fields should read as professional clinical narrative, not bullet points.
+- presenting_concerns: a concise clinical statement of the primary reasons for the evaluation.
+- mental_status_summary: a synthesized narrative of the mental status examination findings, including affect, mood, thought process, insight, and judgment as documented.
+- diagnostic_impressions: the evaluator's diagnostic conclusions or differential diagnoses, in clinical language.
+- risk_assessment: the documented assessment of suicidal ideation, homicidal ideation, self-harm risk, or any safety concerns. If explicitly documented as absent, state that clearly. Use null only if the evaluation contains no risk assessment section at all.
+- recommendations: the evaluator's recommendations for treatment, follow-up, referrals, or further assessment, synthesized as clinical prose.
+- Preserve clinical accuracy and professional tone throughout all narrative fields.`,
+    schema: `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PsychEval",
+  "type": "object",
+  "required": ["patient_id", "eval_date", "evaluator", "presenting_concerns", "mental_status_summary", "diagnostic_impressions", "risk_assessment", "recommendations"],
+  "properties": {
+    "patient_id": { "type": "string" },
+    "eval_date": { "type": "string", "format": "date" },
+    "evaluator": { "type": "string" },
+    "presenting_concerns": { "type": "string" },
+    "mental_status_summary": { "type": "string" },
+    "diagnostic_impressions": { "type": "string" },
+    "risk_assessment": { "type": ["string", "null"] },
+    "recommendations": { "type": "string" }
+  },
+  "additionalProperties": false
+}`,
+  },
+};
+
 const cfg = window.APP_CONFIG || {};
 const COGNITO_DOMAIN = cfg.cognitoHostedUiDomain || '';
 const CLIENT_ID = cfg.cognitoClientId || '';
@@ -449,6 +636,23 @@ async function runGoldTest() {
     if (modelInput) config.extractor_model_id = modelInput;
     config.temperature = Number.isFinite(temperatureInput) ? temperatureInput : 0;
 
+    if (document.getElementById('validate-checkbox').checked) {
+      config.validate = true;
+    }
+
+    const docTypeVal = document.getElementById('doc-type-select').value;
+    if (docTypeVal) {
+      config.doc_type = docTypeVal;
+      const promptText = document.getElementById('prompt-textarea').value.trim();
+      if (promptText) config.custom_prompt = promptText;
+      if (document.getElementById('no-schema-checkbox').checked) {
+        config.custom_schema = '';
+      } else {
+        const schemaText = document.getElementById('schema-textarea').value.trim();
+        if (schemaText) config.custom_schema = schemaText;
+      }
+    }
+
     setHeader(`Starting ${n} pipeline runs…`);
     const experimentId = await startExperiment(sourceDocumentKey, n, referenceText, config);
 
@@ -477,6 +681,32 @@ async function runGoldTest() {
   }
 }
 
+// ── Doc type / custom extraction controls ─────────────────────────────────────
+
+function onDocTypeChange() {
+  const val = document.getElementById('doc-type-select').value;
+  const section = document.getElementById('custom-extraction-section');
+  if (!val) {
+    section.classList.add('hidden');
+    return;
+  }
+  section.classList.remove('hidden');
+  const dt = DOC_TYPES[val];
+  if (dt) {
+    document.getElementById('prompt-textarea').value = dt.prompt;
+    document.getElementById('schema-textarea').value = dt.schema;
+    document.getElementById('no-schema-checkbox').checked = false;
+    document.getElementById('schema-textarea').disabled = false;
+  }
+}
+
+function onNoSchemaChange() {
+  const noSchema = document.getElementById('no-schema-checkbox').checked;
+  const schemaArea = document.getElementById('schema-textarea');
+  schemaArea.disabled = noSchema;
+  if (noSchema) schemaArea.value = '';
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 
 async function init() {
@@ -496,6 +726,8 @@ document.getElementById('signin-btn').addEventListener('click', startSignIn);
 document.getElementById('signout-btn').addEventListener('click', signOut);
 document.getElementById('run-count').addEventListener('input', setRunBtnEnabled);
 document.getElementById('run-btn').addEventListener('click', runGoldTest);
+document.getElementById('doc-type-select').addEventListener('change', onDocTypeChange);
+document.getElementById('no-schema-checkbox').addEventListener('change', onNoSchemaChange);
 document.getElementById('file-input').addEventListener('change', e => {
   currentDocFile = e.target.files[0] || null;
   document.getElementById('file-name').textContent = currentDocFile ? currentDocFile.name : 'No file selected';

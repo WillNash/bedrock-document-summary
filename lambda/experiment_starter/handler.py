@@ -59,6 +59,10 @@ def lambda_handler(event, context):
     extractor_model_id = config.get('extractor_model_id') or None
     raw_temp = config.get('temperature')
     temperature = float(raw_temp) if raw_temp is not None else None
+    doc_type = config.get('doc_type') or None
+    custom_prompt = config.get('custom_prompt') or None
+    # custom_schema: None = not sent (use built-in), '' = explicit no-schema, JSON string = custom
+    custom_schema = config['custom_schema'] if 'custom_schema' in config else None
 
     if not experiment_id:
         return _err(400, 'experiment_id is required')
@@ -145,6 +149,12 @@ def lambda_handler(event, context):
             job_item['extractor_model_id'] = extractor_model_id
         if temperature is not None:
             job_item['temperature'] = Decimal(str(temperature))
+        if doc_type:
+            job_item['doc_type'] = doc_type
+        if custom_prompt:
+            job_item['custom_prompt'] = custom_prompt
+        if custom_schema is not None:
+            job_item['custom_schema'] = custom_schema
         jobs_table.put_item(Item=job_item)
 
         # Copy triggers S3 ObjectCreated → pipeline_starter → pipeline SM

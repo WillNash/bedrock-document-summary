@@ -97,3 +97,12 @@ class TestValidatorLambdaHandler:
         result = validator_handler.lambda_handler(VALID_LAB_RESULT_EVENT, None)
         assert result['bucket'] == 'test-bucket'
         assert result['key'] == 'uploads/job-123/test.txt'
+
+    def test_validate_true_passes_through_in_return(self):
+        event = {**VALID_LAB_RESULT_EVENT, 'validate': True}
+        result = validator_handler.lambda_handler(event, None)
+        assert result['validate'] is True
+
+    def test_validate_absent_defaults_to_false(self):
+        result = validator_handler.lambda_handler(VALID_LAB_RESULT_EVENT, None)
+        assert result.get('validate', False) is False

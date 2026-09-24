@@ -133,6 +133,119 @@ class TestExecutionAlreadyExists:
                 handler.lambda_handler(make_s3_event(), None)
 
 
+class TestValidateFlag:
+    def test_validate_flag_threaded_from_dynamodb(self):
+        mock_ddb, mock_table = make_ddb_mock()
+        mock_table.get_item.return_value = {'Item': {'validate': True}}
+        import json
+
+        with mock.patch.object(handler, 'sfn_client') as mock_sfn, \
+             mock.patch.object(handler, 'dynamodb', mock_ddb):
+
+            handler.lambda_handler(make_s3_event(), None)
+
+            call_kwargs = mock_sfn.start_execution.call_args[1]
+            payload = json.loads(call_kwargs['input'])
+            assert payload.get('validate') is True
+
+    def test_validate_reserved_word_alias_used(self):
+        mock_ddb, mock_table = make_ddb_mock()
+
+        with mock.patch.object(handler, 'sfn_client'), \
+             mock.patch.object(handler, 'dynamodb', mock_ddb):
+
+            handler.lambda_handler(make_s3_event(), None)
+
+            get_item_kwargs = mock_table.get_item.call_args[1]
+            assert 'ExpressionAttributeNames' in get_item_kwargs
+            assert get_item_kwargs['ExpressionAttributeNames'].get('#validate') == 'validate'
+            assert '#validate' in get_item_kwargs['ProjectionExpression']
+
+    def test_validate_absent_from_dynamodb_not_in_sfn_input(self):
+        mock_ddb, mock_table = make_ddb_mock()
+        mock_table.get_item.return_value = {'Item': {}}
+        import json
+
+        with mock.patch.object(handler, 'sfn_client') as mock_sfn, \
+             mock.patch.object(handler, 'dynamodb', mock_ddb):
+
+            handler.lambda_handler(make_s3_event(), None)
+
+            call_kwargs = mock_sfn.start_execution.call_args[1]
+            payload = json.loads(call_kwargs['input'])
+            assert 'validate' not in payload
+
+
+class TestDocTypeBypassFields:
+    def test_doc_type_read_from_dynamodb_and_forwarded(self):
+        mock_ddb, mock_table = make_ddb_mock()
+        mock_table.get_item.return_value = {'Item': {'doc_type': 'lab_result'}}
+        import json
+
+        with mock.patch.object(handler, 'sfn_client') as mock_sfn, \
+             mock.patch.object(handler, 'dynamodb', mock_ddb):
+
+            handler.lambda_handler(make_s3_event(), None)
+
+            payload = json.loads(mock_sfn.start_execution.call_args[1]['input'])
+            assert payload['doc_type'] == 'lab_result'
+
+    def test_custom_prompt_forwarded_when_present(self):
+        mock_ddb, mock_table = make_ddb_mock()
+        mock_table.get_item.return_value = {'Item': {'custom_prompt': 'Extract carefully.'}}
+        import json
+
+        with mock.patch.object(handler, 'sfn_client') as mock_sfn, \
+             mock.patch.object(handler, 'dynamodb', mock_ddb):
+
+            handler.lambda_handler(make_s3_event(), None)
+
+            payload = json.loads(mock_sfn.start_execution.call_args[1]['input'])
+            assert payload['custom_prompt'] == 'Extract carefully.'
+
+    def test_custom_schema_empty_string_forwarded(self):
+        mock_ddb, mock_table = make_ddb_mock()
+        mock_table.get_item.return_value = {'Item': {'custom_schema': ''}}
+        import json
+
+        with mock.patch.object(handler, 'sfn_client') as mock_sfn, \
+             mock.patch.object(handler, 'dynamodb', mock_ddb):
+
+            handler.lambda_handler(make_s3_event(), None)
+
+            payload = json.loads(mock_sfn.start_execution.call_args[1]['input'])
+            assert payload['custom_schema'] == ''
+
+    def test_doc_type_absent_not_forwarded(self):
+        mock_ddb, mock_table = make_ddb_mock()
+        mock_table.get_item.return_value = {'Item': {}}
+        import json
+
+        with mock.patch.object(handler, 'sfn_client') as mock_sfn, \
+             mock.patch.object(handler, 'dynamodb', mock_ddb):
+
+            handler.lambda_handler(make_s3_event(), None)
+
+            payload = json.loads(mock_sfn.start_execution.call_args[1]['input'])
+            assert 'doc_type' not in payload
+            assert 'custom_prompt' not in payload
+            assert 'custom_schema' not in payload
+
+    def test_doc_type_included_in_projection_expression(self):
+        mock_ddb, mock_table = make_ddb_mock()
+
+        with mock.patch.object(handler, 'sfn_client'), \
+             mock.patch.object(handler, 'dynamodb', mock_ddb):
+
+            handler.lambda_handler(make_s3_event(), None)
+
+            get_item_kwargs = mock_table.get_item.call_args[1]
+            proj = get_item_kwargs['ProjectionExpression']
+            assert 'doc_type' in proj
+            assert 'custom_prompt' in proj
+            assert 'custom_schema' in proj
+
+
 class TestConditionalStatusUpdate:
     def test_conditional_check_failure_suppressed(self):
         mock_ddb, mock_table = make_ddb_mock()

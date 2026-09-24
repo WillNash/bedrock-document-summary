@@ -149,6 +149,121 @@ class TestClassifierErrorHandling:
                 )
 
 
+class TestDocTypeBypass:
+    def test_preset_doc_type_skips_bedrock_and_s3(self):
+        with mock.patch.object(handler, 'bedrock_agent') as mock_agent, \
+             mock.patch.object(handler, 'bedrock_runtime') as mock_runtime, \
+             mock.patch.object(handler, 's3_client') as mock_s3:
+
+            result = handler.lambda_handler(
+                {
+                    'job_id': 'job-bypass',
+                    'bucket': 'test-bucket',
+                    'key': 'uploads/job-bypass/doc.txt',
+                    'doc_type': 'lab_result',
+                },
+                None,
+            )
+
+        mock_s3.get_object.assert_not_called()
+        mock_runtime.converse.assert_not_called()
+        mock_agent.get_prompt.assert_not_called()
+        assert result['doc_type'] == 'lab_result'
+        assert result['usage_stats'] == {}
+
+    def test_preset_doc_type_passes_validate_flag(self):
+        with mock.patch.object(handler, 'bedrock_agent'), \
+             mock.patch.object(handler, 'bedrock_runtime'), \
+             mock.patch.object(handler, 's3_client'):
+
+            result = handler.lambda_handler(
+                {
+                    'job_id': 'job-bypass',
+                    'bucket': 'b',
+                    'key': 'uploads/job-bypass/doc.txt',
+                    'doc_type': 'doctors_notes',
+                    'validate': True,
+                },
+                None,
+            )
+
+        assert result['validate'] is True
+
+    def test_preset_doc_type_passes_custom_prompt(self):
+        with mock.patch.object(handler, 'bedrock_agent'), \
+             mock.patch.object(handler, 'bedrock_runtime'), \
+             mock.patch.object(handler, 's3_client'):
+
+            result = handler.lambda_handler(
+                {
+                    'job_id': 'job-bypass',
+                    'bucket': 'b',
+                    'key': 'uploads/job-bypass/doc.txt',
+                    'doc_type': 'injury_doc',
+                    'custom_prompt': 'Extract everything carefully.',
+                },
+                None,
+            )
+
+        assert result['custom_prompt'] == 'Extract everything carefully.'
+        assert 'custom_schema' not in result
+
+    def test_preset_doc_type_passes_custom_schema_including_empty_string(self):
+        with mock.patch.object(handler, 'bedrock_agent'), \
+             mock.patch.object(handler, 'bedrock_runtime'), \
+             mock.patch.object(handler, 's3_client'):
+
+            result = handler.lambda_handler(
+                {
+                    'job_id': 'job-bypass',
+                    'bucket': 'b',
+                    'key': 'uploads/job-bypass/doc.txt',
+                    'doc_type': 'injury_doc',
+                    'custom_schema': '',
+                },
+                None,
+            )
+
+        assert result['custom_schema'] == ''
+
+    def test_validate_flag_passed_through_normal_path(self):
+        with mock.patch.object(handler, 'bedrock_agent') as mock_agent, \
+             mock.patch.object(handler, 'bedrock_runtime') as mock_runtime, \
+             mock.patch.object(handler, 's3_client') as mock_s3:
+
+            mock_agent.get_prompt.return_value = MOCK_PROMPT_RESPONSE
+            mock_runtime.converse.return_value = make_converse_response('lab_result')
+            mock_s3.get_object.return_value = make_s3_response()
+
+            result = handler.lambda_handler(
+                {
+                    'job_id': 'job-normal',
+                    'bucket': 'b',
+                    'key': 'uploads/job-normal/doc.txt',
+                    'validate': True,
+                },
+                None,
+            )
+
+        assert result['validate'] is True
+
+    def test_validate_defaults_to_false_on_normal_path(self):
+        with mock.patch.object(handler, 'bedrock_agent') as mock_agent, \
+             mock.patch.object(handler, 'bedrock_runtime') as mock_runtime, \
+             mock.patch.object(handler, 's3_client') as mock_s3:
+
+            mock_agent.get_prompt.return_value = MOCK_PROMPT_RESPONSE
+            mock_runtime.converse.return_value = make_converse_response('lab_result')
+            mock_s3.get_object.return_value = make_s3_response()
+
+            result = handler.lambda_handler(
+                {'job_id': 'job-normal', 'bucket': 'b', 'key': 'uploads/job-normal/doc.txt'},
+                None,
+            )
+
+        assert result['validate'] is False
+
+
 class TestClassifierPromptRetrieval:
     def test_get_prompt_called_with_arn_and_version(self):
         with mock.patch.object(handler, 'bedrock_agent') as mock_agent, \

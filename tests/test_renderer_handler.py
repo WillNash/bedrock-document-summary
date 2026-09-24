@@ -45,6 +45,44 @@ SAMPLE_EVENT = {
     },
 }
 
+CLAIM_STATS = {'total': 5, 'supported': 4, 'contradicted': 1, 'unverifiable': 0}
+
+VALIDATED_EXPERIMENT_EVENT = {
+    **{
+        'job_id': 'job-rdr-2',
+        'doc_type': 'lab_result',
+        'bucket': 'test-uploads',
+        'key': 'uploads/job-rdr-2/doc.txt',
+        'experiment_id': 'exp-001',
+        'run_number': 1,
+        'validated_data': SAMPLE_EVENT['validated_data'],
+        'usage_stats': {
+            'classifier': {
+                'model': 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+                'prompt_arn': 'arn:aws:bedrock:us-east-1:123:prompt/abc',
+                'prompt_version': '1',
+                'guardrail_id': 'gr-123',
+                'guardrail_version': '1',
+                'input_tokens': 100,
+                'output_tokens': 5,
+            },
+            'extractor': {
+                'model': 'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
+                'prompt_arn': 'arn:aws:bedrock:us-east-1:123:prompt/def',
+                'prompt_version': '2',
+                'input_tokens': 2000,
+                'output_tokens': 300,
+            },
+        },
+    },
+    'claim_validation': {
+        'output': {
+            'validated_summary_key': 'summaries/job-rdr-2/validated_summary.txt',
+            'claim_stats': CLAIM_STATS,
+        },
+    },
+}
+
 EXPERIMENT_EVENT = {
     **SAMPLE_EVENT,
     'job_id': 'job-rdr-2',
@@ -247,6 +285,65 @@ class TestRendererExperimentOutputs:
             renderer_handler.lambda_handler(EXPERIMENT_EVENT, None)
 
         mock_sfn.start_execution.assert_called_once()
+
+    def test_claim_artifacts_written_to_experiment_prefix(self):
+        mock_ddb, _ = self._make_ddb_mock()
+
+        def get_object_side_effect(Bucket, Key):
+            if Key == 'summaries/job-rdr-2/validated_summary.txt':
+                return {'Body': mock.MagicMock(read=lambda: b'Validated summary.')}
+            return {'Body': mock.MagicMock(read=lambda: b'artifact content')}
+
+        with mock.patch.object(renderer_handler, 's3_client') as mock_s3, \
+             mock.patch.object(renderer_handler, 'dynamodb', mock_ddb), \
+             mock.patch.object(renderer_handler, 'sfn_client'):
+
+            mock_s3.get_object.side_effect = get_object_side_effect
+            renderer_handler.lambda_handler(VALIDATED_EXPERIMENT_EVENT, None)
+
+        put_keys = {c.kwargs['Key'] for c in mock_s3.put_object.call_args_list}
+        assert 'experiments/exp-001/runs/1/pre_render.txt' in put_keys
+        assert 'experiments/exp-001/runs/1/claims.json' in put_keys
+        assert 'experiments/exp-001/runs/1/triage.json' in put_keys
+        assert 'experiments/exp-001/runs/1/verdicts.json' in put_keys
+
+    def test_claim_stats_written_to_metadata(self):
+        mock_ddb, _ = self._make_ddb_mock()
+
+        def get_object_side_effect(Bucket, Key):
+            if Key == 'summaries/job-rdr-2/validated_summary.txt':
+                return {'Body': mock.MagicMock(read=lambda: b'Validated summary.')}
+            return {'Body': mock.MagicMock(read=lambda: b'{}')}
+
+        with mock.patch.object(renderer_handler, 's3_client') as mock_s3, \
+             mock.patch.object(renderer_handler, 'dynamodb', mock_ddb), \
+             mock.patch.object(renderer_handler, 'sfn_client'):
+
+            mock_s3.get_object.side_effect = get_object_side_effect
+            renderer_handler.lambda_handler(VALIDATED_EXPERIMENT_EVENT, None)
+
+        put_calls = {c.kwargs['Key']: c.kwargs for c in mock_s3.put_object.call_args_list}
+        metadata = json.loads(put_calls['experiments/exp-001/runs/1/metadata.json']['Body'])
+        assert 'claim_validation' in metadata
+        assert metadata['claim_validation']['stats'] == CLAIM_STATS
+
+    def test_non_validated_experiment_omits_claim_artifacts(self):
+        mock_ddb, _ = self._make_ddb_mock()
+
+        with mock.patch.object(renderer_handler, 's3_client') as mock_s3, \
+             mock.patch.object(renderer_handler, 'dynamodb', mock_ddb), \
+             mock.patch.object(renderer_handler, 'sfn_client'):
+
+            renderer_handler.lambda_handler(EXPERIMENT_EVENT, None)
+
+        put_keys = {c.kwargs['Key'] for c in mock_s3.put_object.call_args_list}
+        assert not any('claims' in k or 'triage' in k or 'verdicts' in k or 'pre_render' in k
+                       for k in put_keys)
+        metadata_body = next(
+            c.kwargs['Body'] for c in mock_s3.put_object.call_args_list
+            if c.kwargs['Key'] == 'experiments/exp-001/runs/1/metadata.json'
+        )
+        assert 'claim_validation' not in json.loads(metadata_body)
 
     def test_non_experiment_job_skips_experiment_path(self):
         with mock.patch.object(renderer_handler, 's3_client') as mock_s3, \

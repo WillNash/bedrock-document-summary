@@ -272,7 +272,7 @@ resource "aws_iam_role_policy" "processing_s3" {
       },
       {
         Effect   = "Allow"
-        Action   = ["s3:PutObject"]
+        Action   = ["s3:GetObject", "s3:PutObject"]
         Resource = "${aws_s3_bucket.summaries.arn}/*"
       },
     ]
@@ -862,6 +862,192 @@ resource "aws_iam_role_policy" "sfn_comparison_invoke_lambdas" {
 resource "aws_iam_role_policy" "sfn_comparison_logs" {
   name = "cloudwatch-logs"
   role = aws_iam_role.sfn_comparison.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "logs:CreateLogDelivery",
+        "logs:PutLogEvents",
+        "logs:GetLogDelivery",
+        "logs:UpdateLogDelivery",
+        "logs:DeleteLogDelivery",
+        "logs:ListLogDeliveries",
+        "logs:PutResourcePolicy",
+        "logs:DescribeResourcePolicies",
+        "logs:DescribeLogGroups",
+      ]
+      Resource = "*"
+    }]
+  })
+}
+
+# ── sfn pipeline: EventBridge managed-rule for .sync:2 nested SM waiting ───────
+# Step Functions creates a managed EventBridge rule to detect child execution
+# completion when using the startExecution.sync:2 service integration.
+
+resource "aws_iam_role_policy" "sfn_events_managed_rule" {
+  name = "eventbridge-managed-rule"
+  role = aws_iam_role.sfn.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "events:PutTargets",
+        "events:PutRule",
+        "events:DescribeRule",
+      ]
+      Resource = "arn:aws:events:${local.region}:${local.account_id}:rule/StepFunctionsGetEventsForStepFunctionsExecutionRule"
+    }]
+  })
+}
+
+# ── sfn pipeline: permission to invoke claim-validator sub-SM (.sync:2) ────────
+
+resource "aws_iam_role_policy" "sfn_pipeline_claim_validator" {
+  name = "sfn-start-claim-validator"
+  role = aws_iam_role.sfn.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["states:StartExecution"]
+        Resource = aws_sfn_state_machine.claim_validator.arn
+      },
+      {
+        Effect = "Allow"
+        Action = ["states:DescribeExecution", "states:StopExecution"]
+        Resource = "arn:aws:states:${local.region}:${local.account_id}:execution:${local.name_prefix}-claim-validator:*"
+      },
+    ]
+  })
+}
+
+# ── claim_validator_processing role (claim_extractor, claim_triager, claim_assessor, summary_assembler) ──
+
+resource "aws_iam_role" "claim_validator_processing" {
+  name               = "${local.name_prefix}-claim-validator-processing-role"
+  assume_role_policy = data.aws_iam_policy_document.lambda_trust.json
+  tags               = local.common_tags
+}
+
+resource "aws_iam_role_policy" "claim_validator_processing_logs" {
+  name = "cloudwatch-logs"
+  role = aws_iam_role.claim_validator_processing.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+      Resource = [
+        "arn:aws:logs:*:${local.account_id}:log-group:/aws/lambda/${local.name_prefix}-claim-extractor:*",
+        "arn:aws:logs:*:${local.account_id}:log-group:/aws/lambda/${local.name_prefix}-claim-triager:*",
+        "arn:aws:logs:*:${local.account_id}:log-group:/aws/lambda/${local.name_prefix}-claim-assessor:*",
+        "arn:aws:logs:*:${local.account_id}:log-group:/aws/lambda/${local.name_prefix}-summary-assembler:*",
+      ]
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "claim_validator_processing_s3" {
+  name = "s3-access"
+  role = aws_iam_role.claim_validator_processing.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["s3:GetObject"]
+        Resource = "${aws_s3_bucket.uploads.arn}/*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["s3:GetObject", "s3:PutObject"]
+        Resource = "${aws_s3_bucket.summaries.arn}/*"
+      },
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "claim_validator_processing_bedrock" {
+  name = "bedrock-invoke"
+  role = aws_iam_role.claim_validator_processing.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = ["bedrock:InvokeModel"]
+      Resource = [
+        "arn:aws:bedrock:*::inference-profile/*",
+        "arn:aws:bedrock:*:${local.account_id}:inference-profile/*",
+        "arn:aws:bedrock:*::foundation-model/*",
+      ]
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "claim_validator_processing_kms" {
+  name = "kms-phi"
+  role = aws_iam_role.claim_validator_processing.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["kms:Decrypt", "kms:GenerateDataKey"]
+      Resource = aws_kms_key.phi.arn
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "claim_validator_processing_xray" {
+  name = "xray"
+  role = aws_iam_role.claim_validator_processing.id
+
+  policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [{ Effect = "Allow", Action = local.xray_actions, Resource = "*" }]
+  })
+}
+
+# ── sfn_claim_validator role ──────────────────────────────────────────────────
+
+resource "aws_iam_role" "sfn_claim_validator" {
+  name               = "${local.name_prefix}-sfn-claim-validator-role"
+  assume_role_policy = data.aws_iam_policy_document.sfn_trust.json
+  tags               = local.common_tags
+}
+
+resource "aws_iam_role_policy" "sfn_claim_validator_invoke_lambdas" {
+  name = "invoke-lambdas"
+  role = aws_iam_role.sfn_claim_validator.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = ["lambda:InvokeFunction"]
+      Resource = [
+        aws_lambda_function.claim_extractor.arn,
+        aws_lambda_function.claim_triager.arn,
+        aws_lambda_function.claim_assessor.arn,
+        aws_lambda_function.summary_assembler.arn,
+      ]
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "sfn_claim_validator_logs" {
+  name = "cloudwatch-logs"
+  role = aws_iam_role.sfn_claim_validator.id
 
   policy = jsonencode({
     Version = "2012-10-17"

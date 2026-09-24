@@ -34,6 +34,26 @@ def lambda_handler(event, context):
     bucket = event['bucket']
     key = event['key']
 
+    if event.get('doc_type'):
+        result: dict = {
+            'job_id': job_id,
+            'bucket': bucket,
+            'key': key,
+            'doc_type': event['doc_type'],
+            'experiment_id': event.get('experiment_id'),
+            'run_number': event.get('run_number'),
+            'extractor_model_id': event.get('extractor_model_id'),
+            'temperature': event.get('temperature'),
+            'validate': event.get('validate', False),
+            'usage_stats': {},
+        }
+        if event.get('custom_prompt'):
+            result['custom_prompt'] = event['custom_prompt']
+        if 'custom_schema' in event:
+            result['custom_schema'] = event['custom_schema']
+        logger.info(json.dumps({'job_id': job_id, 'doc_type': event['doc_type'], 'action': 'doc_type_preset'}))
+        return result
+
     s3_response = s3_client.get_object(Bucket=bucket, Key=key)
     document_text = s3_response['Body'].read().decode('utf-8', errors='replace')
 
@@ -80,6 +100,7 @@ def lambda_handler(event, context):
         'run_number': event.get('run_number'),
         'extractor_model_id': event.get('extractor_model_id'),
         'temperature': event.get('temperature'),
+        'validate': event.get('validate', False),
         'usage_stats': {
             'classifier': {
                 'model': model_id,
