@@ -63,6 +63,7 @@ def lambda_handler(event, context):
     custom_prompt = config.get('custom_prompt') or None
     # custom_schema: None = not sent (use built-in), '' = explicit no-schema, JSON string = custom
     custom_schema = config['custom_schema'] if 'custom_schema' in config else None
+    validate = bool(config.get('validate', False))
 
     if not experiment_id:
         return _err(400, 'experiment_id is required')
@@ -155,6 +156,8 @@ def lambda_handler(event, context):
             job_item['custom_prompt'] = custom_prompt
         if custom_schema is not None:
             job_item['custom_schema'] = custom_schema
+        if validate:
+            job_item['validate'] = True
         jobs_table.put_item(Item=job_item)
 
         # Copy triggers S3 ObjectCreated → pipeline_starter → pipeline SM

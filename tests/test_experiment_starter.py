@@ -132,3 +132,28 @@ class TestHappyPath:
         run_numbers = sorted(int(item['run_number']) for item in job_put_calls)
         assert run_numbers == [1, 2, 3]
         assert all(item['experiment_id'] == 'exp-001' for item in job_put_calls)
+
+    def test_validate_flag_written_to_job_items_when_set(self):
+        mock_s3, mock_ddb, mock_table = make_s3_ddb_mock()
+        body = {**VALID_BODY, 'config': {'validate': True}}
+        with mock.patch.object(handler, 's3_client', mock_s3), \
+             mock.patch.object(handler, 'dynamodb', mock_ddb):
+            handler.lambda_handler(make_event(body), None)
+
+        job_put_calls = [
+            c.kwargs['Item'] for c in mock_table.put_item.call_args_list
+            if 'job_id' in c.kwargs.get('Item', {})
+        ]
+        assert all(item.get('validate') is True for item in job_put_calls)
+
+    def test_validate_flag_absent_from_job_items_when_not_set(self):
+        mock_s3, mock_ddb, mock_table = make_s3_ddb_mock()
+        with mock.patch.object(handler, 's3_client', mock_s3), \
+             mock.patch.object(handler, 'dynamodb', mock_ddb):
+            handler.lambda_handler(make_event(VALID_BODY), None)
+
+        job_put_calls = [
+            c.kwargs['Item'] for c in mock_table.put_item.call_args_list
+            if 'job_id' in c.kwargs.get('Item', {})
+        ]
+        assert all('validate' not in item for item in job_put_calls)
