@@ -29,7 +29,7 @@ resource "aws_sfn_state_machine" "pipeline" {
 
 resource "aws_sfn_state_machine" "claim_validator" {
   name = "${local.name_prefix}-claim-validator"
-  type = "EXPRESS"
+  type = "STANDARD"
 
   role_arn = aws_iam_role.sfn_claim_validator.arn
 
