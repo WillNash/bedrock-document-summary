@@ -1,6 +1,5 @@
 # ── Pipeline failure alarms ───────────────────────────────────────────────────
 
-# Express Workflows do NOT emit ExecutionsFailed — use fail_handler invocations instead.
 # Every invocation of fail_handler represents exactly one failed document.
 resource "aws_cloudwatch_metric_alarm" "fail_handler_invocations" {
   alarm_name          = "${local.name_prefix}-pipeline-failures"

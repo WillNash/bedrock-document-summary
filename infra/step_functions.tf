@@ -1,6 +1,6 @@
 resource "aws_sfn_state_machine" "pipeline" {
   name = "${local.name_prefix}-pipeline"
-  type = "EXPRESS"
+  type = "STANDARD"
 
   role_arn = aws_iam_role.sfn.arn
 

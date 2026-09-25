@@ -1,6 +1,6 @@
 # Comparison Flows — Complete Step-by-Step Breakdown
 
-There are two ways to initiate a comparison experiment, both of which use the document pipeline Express state machine and the comparison Standard state machine:
+There are two ways to initiate a comparison experiment, both of which use the document pipeline Standard state machine and the comparison Standard state machine:
 
 - **Flow A — gold.html (browser-initiated):** User picks a document and reference file in the browser, chooses N runs, and clicks Run Test. The browser uploads the document once, calls `POST /experiments`, then polls `GET /experiments/{experimentId}` every 10s until the comparison state machine completes.
 - **Flow B — direct API call:** Caller POSTs to `POST /experiments` directly with an existing S3 key as `source_document_key`. Identical to Flow A from `experiment_starter` onwards.
@@ -93,7 +93,7 @@ For the full server-side handling of this request, see [Flow B, step B0](#b0-cal
 
 ### A4. Pipeline Runs (Server-Side)
 
-`experiment_starter` copies the source document N times in a loop. Each S3 copy triggers `pipeline_starter` → pipeline Express SM. All N runs execute in parallel without further browser involvement.
+`experiment_starter` copies the source document N times in a loop. Each S3 copy triggers `pipeline_starter` → pipeline Standard SM. All N runs execute in parallel without further browser involvement.
 
 For full detail see [Flow B, steps B1–B2](#b1-pipeline-starter--per-run-n-times-in-parallel).
 
@@ -229,7 +229,7 @@ This S3 copy immediately fires an `ObjectCreated` event, triggering `pipeline_st
 **Read:** DynamoDB `jobs` table — `ProjectionExpression='experiment_id, run_number'`  
 Both fields are present (written by `experiment_starter`).
 
-**Write:** Step Functions — starts pipeline EXPRESS execution with experiment context in input:
+**Write:** Step Functions — starts pipeline STANDARD execution with experiment context in input:
 ```json
 {
   "job_id": "...", "bucket": "...", "key": "uploads/{job_id}/{filename}",
@@ -333,7 +333,7 @@ Comparison SM execution input:
 ### B3. Comparison State Machine
 
 **Definition:** `infra/comparison_sm.json.tpl`  
-**Type:** STANDARD (not EXPRESS — execution history persists, can be inspected)  
+**Type:** STANDARD (execution history persists, can be inspected)  
 **Logging:** ERROR only, `include_execution_data = false`
 
 Unlike the pipeline SM, several states use `ResultPath` to merge their output into the accumulated state rather than replacing it:
@@ -521,4 +521,4 @@ Prompt instructs Claude to write a 200–400 word Markdown analysis covering: in
 | BERTScore token limit | 512 (`gold_scorer`, Step Functions constraint) | Same |
 | Results stored | S3 + DynamoDB + client-side zip auto-downloaded | S3 + DynamoDB |
 | Results accessed by | Browser polls `api_experiment_status` every 10s; zip triggered on completion | Caller polls `GET /experiments/{experimentId}` |
-| State machine types | Pipeline: EXPRESS; Comparison: STANDARD | Same |
+| State machine types | Pipeline: STANDARD; Comparison: STANDARD | Same |
