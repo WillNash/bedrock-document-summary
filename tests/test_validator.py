@@ -1,5 +1,6 @@
 """Unit tests for the validator Lambda handler."""
 import importlib.util
+import json
 from pathlib import Path
 from unittest import mock
 
@@ -106,3 +107,46 @@ class TestValidatorLambdaHandler:
     def test_validate_absent_defaults_to_false(self):
         result = validator_handler.lambda_handler(VALID_LAB_RESULT_EVENT, None)
         assert result.get('validate', False) is False
+
+    def test_custom_schema_json_string_used_for_validation(self):
+        custom_schema = json.dumps({
+            'type': 'object',
+            'properties': {'name': {'type': 'string'}},
+            'required': ['name'],
+        })
+        event = {
+            **VALID_LAB_RESULT_EVENT,
+            'extracted_data': {'name': 'Alice'},
+            'custom_schema': custom_schema,
+        }
+        result = validator_handler.lambda_handler(event, None)
+        assert result['validated_data'] == {'name': 'Alice'}
+        assert result['custom_schema'] == custom_schema
+
+    def test_custom_schema_json_string_rejects_invalid_data(self):
+        custom_schema = json.dumps({
+            'type': 'object',
+            'properties': {'name': {'type': 'string'}},
+            'required': ['name'],
+        })
+        event = {
+            **VALID_LAB_RESULT_EVENT,
+            'extracted_data': {'wrong_field': 123},
+            'custom_schema': custom_schema,
+        }
+        with pytest.raises(jsonschema.ValidationError):
+            validator_handler.lambda_handler(event, None)
+
+    def test_custom_schema_empty_string_skips_validation(self):
+        event = {
+            **VALID_LAB_RESULT_EVENT,
+            'extracted_data': {'anything': 'goes'},
+            'custom_schema': '',
+        }
+        result = validator_handler.lambda_handler(event, None)
+        assert result['validated_data'] == {'anything': 'goes'}
+        assert result['custom_schema'] == ''
+
+    def test_custom_schema_not_in_return_when_absent(self):
+        result = validator_handler.lambda_handler(VALID_LAB_RESULT_EVENT, None)
+        assert 'custom_schema' not in result

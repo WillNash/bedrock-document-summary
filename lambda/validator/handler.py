@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 from pathlib import Path
 
 import jsonschema
@@ -30,12 +29,16 @@ def lambda_handler(event, context):
     doc_type = event['doc_type']
     extracted_data = event['extracted_data']
 
-    schema = _load_schema(doc_type)
-    jsonschema.validate(instance=extracted_data, schema=schema)
+    raw_custom_schema = event.get('custom_schema')
+    if 'custom_schema' not in event:
+        jsonschema.validate(instance=extracted_data, schema=_load_schema(doc_type))
+    elif raw_custom_schema:
+        jsonschema.validate(instance=extracted_data, schema=json.loads(raw_custom_schema))
+    # else: custom_schema == '' → skip validation
 
     logger.info(json.dumps({'job_id': job_id, 'doc_type': doc_type, 'action': 'validated'}))
 
-    return {
+    result = {
         'job_id': job_id,
         'bucket': event['bucket'],
         'key': event['key'],
@@ -48,3 +51,6 @@ def lambda_handler(event, context):
         'validate': event.get('validate', False),
         'usage_stats': event.get('usage_stats', {}),
     }
+    if 'custom_schema' in event:
+        result['custom_schema'] = event['custom_schema']
+    return result

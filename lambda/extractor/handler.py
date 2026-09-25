@@ -66,13 +66,22 @@ def lambda_handler(event, context):
     s3_response = s3_client.get_object(Bucket=bucket, Key=key)
     document_text = s3_response['Body'].read().decode('utf-8', errors='replace')
 
-    schema = _load_schema(doc_type)
-    system_prompt = _get_prompt_text(doc_type)
+    raw_custom_schema = event.get('custom_schema')
+    schema = json.loads(raw_custom_schema) if raw_custom_schema else _load_schema(doc_type)
+
+    custom_prompt = event.get('custom_prompt')
+    if custom_prompt:
+        system_prompt = custom_prompt
+        prompt_arn = ''
+        prompt_version = ''
+    else:
+        system_prompt = _get_prompt_text(doc_type)
+        arns, versions = _get_prompt_config()
+        prompt_arn = arns[doc_type]
+        prompt_version = versions[doc_type]
+
     model_id = event.get('extractor_model_id') or os.environ['BEDROCK_MODEL_ID']
     temperature = float(event['temperature']) if event.get('temperature') is not None else 0
-    arns, versions = _get_prompt_config()
-    prompt_arn = arns[doc_type]
-    prompt_version = versions[doc_type]
 
     tool_def = {
         'toolSpec': {
@@ -119,7 +128,7 @@ def lambda_handler(event, context):
     usage = response.get('usage', {})
     logger.info(json.dumps({'job_id': job_id, 'doc_type': doc_type, 'action': 'extracted'}))
 
-    return {
+    result = {
         'job_id': job_id,
         'bucket': bucket,
         'key': key,
@@ -141,3 +150,8 @@ def lambda_handler(event, context):
             },
         },
     }
+    if event.get('custom_prompt'):
+        result['custom_prompt'] = event['custom_prompt']
+    if 'custom_schema' in event:
+        result['custom_schema'] = event['custom_schema']
+    return result

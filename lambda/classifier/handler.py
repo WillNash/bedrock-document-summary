@@ -91,7 +91,7 @@ def lambda_handler(event, context):
     usage = response.get('usage', {})
     logger.info(json.dumps({'job_id': job_id, 'doc_type': raw_label, 'action': 'classified'}))
 
-    return {
+    result = {
         'job_id': job_id,
         'bucket': bucket,
         'key': key,
@@ -113,3 +113,8 @@ def lambda_handler(event, context):
             },
         },
     }
+    if event.get('custom_prompt'):
+        result['custom_prompt'] = event['custom_prompt']
+    if 'custom_schema' in event:
+        result['custom_schema'] = event['custom_schema']
+    return result

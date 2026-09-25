@@ -224,6 +224,128 @@ class TestExtractorResponseParsing:
                 )
 
 
+class TestCustomPromptAndSchema:
+    def test_custom_prompt_used_as_system_prompt(self):
+        with mock.patch.object(handler, 'bedrock_agent') as mock_agent, \
+             mock.patch.object(handler, 'bedrock_runtime') as mock_runtime, \
+             mock.patch.object(handler, 's3_client') as mock_s3:
+
+            mock_runtime.converse.return_value = make_tool_use_response(EXTRACTED_LAB_RESULT)
+            mock_s3.get_object.return_value = make_s3_response()
+
+            handler.lambda_handler(
+                {
+                    'job_id': 'j-cp',
+                    'bucket': 'b',
+                    'key': 'uploads/j-cp/doc.txt',
+                    'doc_type': 'lab_result',
+                    'custom_prompt': 'My custom extraction prompt.',
+                },
+                None,
+            )
+
+        mock_agent.get_prompt.assert_not_called()
+        call_kwargs = mock_runtime.converse.call_args.kwargs
+        assert call_kwargs['system'] == [{'text': 'My custom extraction prompt.'}]
+
+    def test_custom_schema_used_for_tool_spec(self):
+        custom_schema = json.dumps({
+            'type': 'object',
+            'title': 'CustomDoc',
+            'properties': {'field': {'type': 'string'}},
+            'required': ['field'],
+        })
+        with mock.patch.object(handler, 'bedrock_agent') as mock_agent, \
+             mock.patch.object(handler, 'bedrock_runtime') as mock_runtime, \
+             mock.patch.object(handler, 's3_client') as mock_s3:
+
+            mock_agent.get_prompt.return_value = MOCK_PROMPT_RESPONSE
+            mock_runtime.converse.return_value = make_tool_use_response({'field': 'value'})
+            mock_s3.get_object.return_value = make_s3_response()
+
+            handler.lambda_handler(
+                {
+                    'job_id': 'j-cs',
+                    'bucket': 'b',
+                    'key': 'uploads/j-cs/doc.txt',
+                    'doc_type': 'lab_result',
+                    'custom_schema': custom_schema,
+                },
+                None,
+            )
+
+        call_kwargs = mock_runtime.converse.call_args.kwargs
+        schema_used = call_kwargs['toolConfig']['tools'][0]['toolSpec']['inputSchema']['json']
+        assert schema_used['title'] == 'CustomDoc'
+
+    def test_custom_prompt_and_schema_passed_forward_in_return(self):
+        custom_schema = json.dumps({'type': 'object', 'properties': {}})
+        with mock.patch.object(handler, 'bedrock_agent') as mock_agent, \
+             mock.patch.object(handler, 'bedrock_runtime') as mock_runtime, \
+             mock.patch.object(handler, 's3_client') as mock_s3:
+
+            mock_agent.get_prompt.return_value = MOCK_PROMPT_RESPONSE
+            mock_runtime.converse.return_value = make_tool_use_response(EXTRACTED_LAB_RESULT)
+            mock_s3.get_object.return_value = make_s3_response()
+
+            result = handler.lambda_handler(
+                {
+                    'job_id': 'j-fwd',
+                    'bucket': 'b',
+                    'key': 'uploads/j-fwd/doc.txt',
+                    'doc_type': 'lab_result',
+                    'custom_prompt': 'My prompt.',
+                    'custom_schema': custom_schema,
+                },
+                None,
+            )
+
+        assert result['custom_prompt'] == 'My prompt.'
+        assert result['custom_schema'] == custom_schema
+
+    def test_custom_schema_empty_string_falls_back_to_builtin(self):
+        with mock.patch.object(handler, 'bedrock_agent') as mock_agent, \
+             mock.patch.object(handler, 'bedrock_runtime') as mock_runtime, \
+             mock.patch.object(handler, 's3_client') as mock_s3:
+
+            mock_agent.get_prompt.return_value = MOCK_PROMPT_RESPONSE
+            mock_runtime.converse.return_value = make_tool_use_response(EXTRACTED_LAB_RESULT)
+            mock_s3.get_object.return_value = make_s3_response()
+
+            handler.lambda_handler(
+                {
+                    'job_id': 'j-es',
+                    'bucket': 'b',
+                    'key': 'uploads/j-es/doc.txt',
+                    'doc_type': 'lab_result',
+                    'custom_schema': '',
+                },
+                None,
+            )
+
+        call_kwargs = mock_runtime.converse.call_args.kwargs
+        schema_used = call_kwargs['toolConfig']['tools'][0]['toolSpec']['inputSchema']['json']
+        assert schema_used.get('title') == 'LabResult'
+
+    def test_neither_field_in_return_when_not_in_event(self):
+        with mock.patch.object(handler, 'bedrock_agent') as mock_agent, \
+             mock.patch.object(handler, 'bedrock_runtime') as mock_runtime, \
+             mock.patch.object(handler, 's3_client') as mock_s3:
+
+            mock_agent.get_prompt.return_value = MOCK_PROMPT_RESPONSE
+            mock_runtime.converse.return_value = make_tool_use_response(EXTRACTED_LAB_RESULT)
+            mock_s3.get_object.return_value = make_s3_response()
+
+            result = handler.lambda_handler(
+                {'job_id': 'j-none', 'bucket': 'b', 'key': 'uploads/j-none/doc.txt',
+                 'doc_type': 'lab_result'},
+                None,
+            )
+
+        assert 'custom_prompt' not in result
+        assert 'custom_schema' not in result
+
+
 class TestExtractorPromptRetrieval:
     def test_get_prompt_called_with_correct_arn_and_version(self):
         with mock.patch.object(handler, 'bedrock_agent') as mock_agent, \
