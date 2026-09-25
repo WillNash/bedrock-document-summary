@@ -711,9 +711,12 @@ resource "aws_iam_role_policy" "comparison_processing_s3" {
         Resource = "${aws_s3_bucket.summaries.arn}/experiments/*"
       },
       {
-        Effect   = "Allow"
-        Action   = ["s3:PutObject"]
-        Resource = "${aws_s3_bucket.summaries.arn}/experiments/*/report/*"
+        Effect = "Allow"
+        Action = ["s3:PutObject"]
+        Resource = [
+          "${aws_s3_bucket.summaries.arn}/experiments/*/report/*",
+          "${aws_s3_bucket.summaries.arn}/experiments/*/embeddings/*",
+        ]
       },
       {
         Effect   = "Allow"
@@ -816,6 +819,20 @@ resource "aws_iam_role_policy" "comparison_fail_handler_dynamodb" {
       Effect   = "Allow"
       Action   = ["dynamodb:UpdateItem"]
       Resource = aws_dynamodb_table.experiments.arn
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "comparison_fail_handler_kms" {
+  name = "kms-phi"
+  role = aws_iam_role.comparison_fail_handler.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["kms:Decrypt", "kms:GenerateDataKey"]
+      Resource = aws_kms_key.phi.arn
     }]
   })
 }
