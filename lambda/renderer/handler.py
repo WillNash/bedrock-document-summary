@@ -37,6 +37,18 @@ dynamodb = boto3.resource('dynamodb')
 sfn_client = boto3.client('stepfunctions')
 
 
+def _parse_claim_output(event):
+    raw = event.get('claim_validation', {}).get('output')
+    if not raw:
+        return {}
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            return {}
+    return raw if isinstance(raw, dict) else {}
+
+
 def _copy_claim_artifacts(job_id, run_prefix, summaries_bucket):
     artifacts = [
         (f'summaries/{job_id}/pre_render.txt', f'{run_prefix}/pre_render.txt', 'text/plain; charset=utf-8'),
@@ -67,7 +79,7 @@ def _write_experiment_outputs(event, summary_text, summaries_bucket, completed_a
         ContentType='text/plain; charset=utf-8',
     )
 
-    claim_validation = event.get('claim_validation', {}).get('output', {})
+    claim_validation = _parse_claim_output(event)
     if claim_validation:
         _copy_claim_artifacts(job_id, run_prefix, summaries_bucket)
 
@@ -168,7 +180,7 @@ def lambda_handler(event, context):
     doc_type = event['doc_type']
     validated_data = event['validated_data']
 
-    validated_summary_key = event.get('claim_validation', {}).get('output', {}).get('validated_summary_key')
+    validated_summary_key = _parse_claim_output(event).get('validated_summary_key')
     if validated_summary_key:
         obj = s3_client.get_object(Bucket=os.environ['SUMMARIES_BUCKET'], Key=validated_summary_key)
         summary_text = obj['Body'].read().decode('utf-8')

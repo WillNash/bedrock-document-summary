@@ -102,7 +102,7 @@
         }
       },
       "ResultSelector": {
-        "output.$": "States.StringToJson($.Output)"
+        "output.$": "$.Output"
       },
       "ResultPath": "$.claim_validation",
       "Retry": [
