@@ -24,9 +24,17 @@ EVENT = {
     'successful_n': 5,
     'config': {'description': 'test run'},
     'variance_results': {
+        'embedding_model': 'amazon.titan-embed-text-v2:0',
+        'embedding_dimensions': 1024,
+        'embedding_normalize': True,
         'embedding_cosine': {'mean': 0.95, 'std': 0.02, 'min': 0.91, 'max': 0.98, 'n_runs': 5, 'n_pairs': 10, 'variance': 0.0004, 'matrix': [], 'run_numbers': [1, 2, 3, 4, 5]},
         'tfidf_cosine': {'mean': 0.88, 'std': 0.05, 'min': 0.80, 'max': 0.93, 'n_runs': 5, 'n_pairs': 10, 'variance': 0.0025, 'matrix': [], 'run_numbers': [1, 2, 3, 4, 5]},
     },
+    'run_manifests': [
+        {'run_number': i, 'summary_key': f'experiments/exp-001/summaries/run_{i}.txt'}
+        for i in range(1, 6)
+    ],
+    'gold_key': None,
     'gold_results': None,
     'report': {'narrative_md': '## Summary\n\nThe pipeline shows high consistency.'},
 }
@@ -88,3 +96,50 @@ class TestReportWriter:
 
         assert result['experiment_id'] == 'exp-001'
         assert 'experiments/exp-001/report/' in result['report_prefix']
+
+    def test_validate_flag_in_comparison_json(self):
+        event = {**EVENT, 'config': {'validate': True}}
+        with mock.patch.object(handler, 's3_client') as mock_s3, \
+             mock.patch.object(handler, 'dynamodb') as mock_ddb:
+            mock_ddb.Table.return_value = mock.MagicMock()
+            handler.lambda_handler(event, None)
+
+        put_calls = {c.kwargs['Key']: c.kwargs for c in mock_s3.put_object.call_args_list}
+        report = json.loads(put_calls['experiments/exp-001/report/comparison.json']['Body'])
+        assert report['validate'] is True
+
+    def test_validate_flag_false_by_default_in_comparison_json(self):
+        with mock.patch.object(handler, 's3_client') as mock_s3, \
+             mock.patch.object(handler, 'dynamodb') as mock_ddb:
+            mock_ddb.Table.return_value = mock.MagicMock()
+            handler.lambda_handler(EVENT, None)
+
+        put_calls = {c.kwargs['Key']: c.kwargs for c in mock_s3.put_object.call_args_list}
+        report = json.loads(put_calls['experiments/exp-001/report/comparison.json']['Body'])
+        assert report['validate'] is False
+
+    def test_embeddings_json_written(self):
+        with mock.patch.object(handler, 's3_client') as mock_s3, \
+             mock.patch.object(handler, 'dynamodb') as mock_ddb:
+            mock_ddb.Table.return_value = mock.MagicMock()
+            handler.lambda_handler(EVENT, None)
+
+        put_calls = {c.kwargs['Key']: c.kwargs for c in mock_s3.put_object.call_args_list}
+        assert 'experiments/exp-001/embeddings/embeddings.json' in put_calls
+        doc = json.loads(put_calls['experiments/exp-001/embeddings/embeddings.json']['Body'])
+        assert doc['embedding_model'] == 'amazon.titan-embed-text-v2:0'
+        assert doc['embedding_dimensions'] == 1024
+        assert doc['normalize'] is True
+        assert len(doc['run_references']) == 5
+        assert doc['run_references'][0] == {'run_number': 1, 'summary_key': 'experiments/exp-001/summaries/run_1.txt'}
+
+    def test_embeddings_json_includes_gold_key(self):
+        event = {**EVENT, 'gold_key': 'experiments/exp-001/gold.txt'}
+        with mock.patch.object(handler, 's3_client') as mock_s3, \
+             mock.patch.object(handler, 'dynamodb') as mock_ddb:
+            mock_ddb.Table.return_value = mock.MagicMock()
+            handler.lambda_handler(event, None)
+
+        put_calls = {c.kwargs['Key']: c.kwargs for c in mock_s3.put_object.call_args_list}
+        doc = json.loads(put_calls['experiments/exp-001/embeddings/embeddings.json']['Body'])
+        assert doc['gold_key'] == 'experiments/exp-001/gold.txt'

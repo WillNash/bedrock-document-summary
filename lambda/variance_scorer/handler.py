@@ -143,6 +143,9 @@ def lambda_handler(event, context):
     }))
 
     return {
+        'embedding_model': EMBEDDING_MODEL,
+        'embedding_dimensions': EMBEDDING_DIMENSIONS,
+        'embedding_normalize': True,
         'embedding_cosine': {
             'matrix': emb_matrix,
             'run_numbers': run_numbers,

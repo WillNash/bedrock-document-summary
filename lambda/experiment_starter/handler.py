@@ -98,6 +98,22 @@ def lambda_handler(event, context):
             ContentType='text/plain; charset=utf-8',
         )
 
+    if custom_prompt:
+        s3_client.put_object(
+            Bucket=summaries_bucket,
+            Key=f'experiments/{experiment_id}/prompt.md',
+            Body=custom_prompt.encode('utf-8'),
+            ContentType='text/markdown; charset=utf-8',
+        )
+
+    if custom_schema:
+        s3_client.put_object(
+            Bucket=summaries_bucket,
+            Key=f'experiments/{experiment_id}/schema.json',
+            Body=json.dumps(json.loads(custom_schema), indent=2).encode('utf-8'),
+            ContentType='application/json',
+        )
+
     experiment_config = {
         **config,
         'source_document_key': source_document_key,

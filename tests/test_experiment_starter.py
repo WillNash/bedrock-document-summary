@@ -157,3 +157,57 @@ class TestHappyPath:
             if 'job_id' in c.kwargs.get('Item', {})
         ]
         assert all('validate' not in item for item in job_put_calls)
+
+    def test_prompt_md_written_when_custom_prompt_set(self):
+        mock_s3, mock_ddb, _ = make_s3_ddb_mock()
+        body = {**VALID_BODY, 'config': {'custom_prompt': 'Summarise briefly.'}}
+        with mock.patch.object(handler, 's3_client', mock_s3), \
+             mock.patch.object(handler, 'dynamodb', mock_ddb):
+            handler.lambda_handler(make_event(body), None)
+
+        put_keys = [c.kwargs['Key'] for c in mock_s3.put_object.call_args_list]
+        assert any('prompt.md' in k for k in put_keys)
+        prompt_call = next(c for c in mock_s3.put_object.call_args_list if 'prompt.md' in c.kwargs['Key'])
+        assert b'Summarise briefly.' in prompt_call.kwargs['Body']
+
+    def test_prompt_md_not_written_when_custom_prompt_absent(self):
+        mock_s3, mock_ddb, _ = make_s3_ddb_mock()
+        with mock.patch.object(handler, 's3_client', mock_s3), \
+             mock.patch.object(handler, 'dynamodb', mock_ddb):
+            handler.lambda_handler(make_event(VALID_BODY), None)
+
+        put_keys = [c.kwargs['Key'] for c in mock_s3.put_object.call_args_list]
+        assert not any('prompt.md' in k for k in put_keys)
+
+    def test_schema_json_written_when_custom_schema_set(self):
+        mock_s3, mock_ddb, _ = make_s3_ddb_mock()
+        schema = '{"type": "object", "properties": {"name": {"type": "string"}}}'
+        body = {**VALID_BODY, 'config': {'custom_schema': schema}}
+        with mock.patch.object(handler, 's3_client', mock_s3), \
+             mock.patch.object(handler, 'dynamodb', mock_ddb):
+            handler.lambda_handler(make_event(body), None)
+
+        put_keys = [c.kwargs['Key'] for c in mock_s3.put_object.call_args_list]
+        assert any('schema.json' in k for k in put_keys)
+        schema_call = next(c for c in mock_s3.put_object.call_args_list if 'schema.json' in c.kwargs['Key'])
+        written = json.loads(schema_call.kwargs['Body'])
+        assert written['type'] == 'object'
+
+    def test_schema_json_not_written_when_custom_schema_empty(self):
+        mock_s3, mock_ddb, _ = make_s3_ddb_mock()
+        body = {**VALID_BODY, 'config': {'custom_schema': ''}}
+        with mock.patch.object(handler, 's3_client', mock_s3), \
+             mock.patch.object(handler, 'dynamodb', mock_ddb):
+            handler.lambda_handler(make_event(body), None)
+
+        put_keys = [c.kwargs['Key'] for c in mock_s3.put_object.call_args_list]
+        assert not any('schema.json' in k for k in put_keys)
+
+    def test_schema_json_not_written_when_custom_schema_absent(self):
+        mock_s3, mock_ddb, _ = make_s3_ddb_mock()
+        with mock.patch.object(handler, 's3_client', mock_s3), \
+             mock.patch.object(handler, 'dynamodb', mock_ddb):
+            handler.lambda_handler(make_event(VALID_BODY), None)
+
+        put_keys = [c.kwargs['Key'] for c in mock_s3.put_object.call_args_list]
+        assert not any('schema.json' in k for k in put_keys)
