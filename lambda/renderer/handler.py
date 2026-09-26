@@ -79,6 +79,13 @@ def _write_experiment_outputs(event, summary_text, summaries_bucket, completed_a
         ContentType='text/plain; charset=utf-8',
     )
 
+    s3_client.put_object(
+        Bucket=summaries_bucket,
+        Key=f'experiments/{experiment_id}/runs/{run_number}.json',
+        Body=json.dumps({'completed_at': completed_at, 'job_id': job_id, 'doc_type': event['doc_type']}).encode('utf-8'),
+        ContentType='application/json',
+    )
+
     claim_validation = _parse_claim_output(event)
     if claim_validation:
         _copy_claim_artifacts(job_id, run_prefix, summaries_bucket)

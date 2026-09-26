@@ -60,9 +60,31 @@ def _dot(a: list[float], b: list[float]) -> float:
     return sum(x * y for x, y in zip(a, b))
 
 
+_TITLE_ABBREVS = re.compile(r'\b(?:Dr|Mr|Mrs|Ms|Prof|Sr|Jr|vs|etc|No|St)\.\s*$', re.IGNORECASE)
+
+
+def _strip_json_fence(raw: str) -> str:
+    if raw.startswith('```'):
+        raw = re.sub(r'^```(?:json)?\s*\n?', '', raw)
+        raw = re.sub(r'\s*```\s*$', '', raw)
+    return raw.strip()
+
+
 def _split_sentences(text: str) -> list[str]:
-    sentences = re.split(r'(?<=[.!?]) +', text)
-    return [s.strip() for s in sentences if s.strip()]
+    sentences = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or re.match(r'^[=\-]+$', line):
+            continue
+        raw_parts = re.split(r'(?<=[.!?])\s+', line)
+        merged: list[str] = []
+        for part in raw_parts:
+            if merged and _TITLE_ABBREVS.search(merged[-1]):
+                merged[-1] += ' ' + part
+            else:
+                merged.append(part)
+        sentences.extend(p.strip() for p in merged if p.strip())
+    return sentences
 
 
 def _extract_claim(sentence: str, context_before: list[str], context_after: list[str]) -> dict[str, Any] | None:
@@ -76,7 +98,7 @@ def _extract_claim(sentence: str, context_before: list[str], context_after: list
         messages=[{'role': 'user', 'content': [{'text': window}]}],
         inferenceConfig={'maxTokens': 256, 'temperature': 0},
     )
-    raw = response['output']['message']['content'][0]['text'].strip()
+    raw = _strip_json_fence(response['output']['message']['content'][0]['text'].strip())
     try:
         return json.loads(raw)
     except json.JSONDecodeError:

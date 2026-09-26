@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -34,6 +35,13 @@ VERDICT_SYSTEM = (
     '{\"verdict\": \"supported\"|\"contradicted\"|\"unverifiable\", '
     '\"evidence_quote\": \"...\", \"reason\": \"...\"}'
 )
+
+
+def _strip_json_fence(raw: str) -> str:
+    if raw.startswith('```'):
+        raw = re.sub(r'^```(?:json)?\s*\n?', '', raw)
+        raw = re.sub(r'\s*```\s*$', '', raw)
+    return raw.strip()
 
 
 def _embed(text: str) -> list[float]:
@@ -75,7 +83,7 @@ def _triage_claim(claim: str, passage_texts: list[str], passage_embeddings: list
         messages=[{'role': 'user', 'content': [{'text': user_msg}]}],
         inferenceConfig={'maxTokens': 512, 'temperature': 0},
     )
-    raw = response['output']['message']['content'][0]['text'].strip()
+    raw = _strip_json_fence(response['output']['message']['content'][0]['text'].strip())
     try:
         verdict = json.loads(raw)
     except json.JSONDecodeError:
