@@ -31,6 +31,9 @@ VERDICT_SYSTEM = (
     "(2) Use ONLY the provided passages — no external knowledge. "
     "(3) Named failure modes to detect: quantifier drift, causal embellishment, numerical "
     "transposition, entity swaps. "
+    "(4) Temporal context: a past observation ('did not do X') is NOT contradicted by a "
+    "future plan ('will do X'). History and plan sections describe different points in time; "
+    "judge the claim against the tense it refers to. "
     "Return JSON only: "
     '{\"verdict\": \"supported\"|\"contradicted\"|\"unverifiable\", '
     '\"evidence_quote\": \"...\", \"reason\": \"...\"}'

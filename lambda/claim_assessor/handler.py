@@ -24,7 +24,10 @@ VERDICT_SYSTEM = (
     "(2) Use ONLY the provided passages — no external knowledge. "
     "(3) Named failure modes to detect: quantifier drift, causal embellishment, numerical "
     "transposition, entity swaps. "
-    "(4) Apply maximum caution — this claim has been flagged as potentially incorrect. "
+    "(4) Temporal context: a past observation ('did not do X') is NOT contradicted by a "
+    "future plan ('will do X'). History and plan sections describe different points in time; "
+    "judge the claim against the tense it refers to. "
+    "(5) Apply maximum caution — this claim has been flagged as potentially incorrect. "
     "Return JSON only: "
     '{\"verdict\": \"supported\"|\"contradicted\"|\"unverifiable\", '
     '\"evidence_quote\": \"...\", \"reason\": \"...\"}'
@@ -49,6 +52,10 @@ def _reassess(verdict_record: dict[str, Any]) -> dict[str, Any]:
         inferenceConfig={'maxTokens': 512, 'temperature': 0},
     )
     raw = response['output']['message']['content'][0]['text'].strip()
+    if raw.startswith('```'):
+        import re
+        raw = re.sub(r'^```(?:json)?\s*\n?', '', raw)
+        raw = re.sub(r'\s*```\s*$', '', raw)
     try:
         updated = json.loads(raw)
     except json.JSONDecodeError:
@@ -57,7 +64,9 @@ def _reassess(verdict_record: dict[str, Any]) -> dict[str, Any]:
 
     updated['claim'] = claim
     updated['top_passage_similarity'] = verdict_record.get('top_passage_similarity', 0.0)
+    updated['top_passages'] = verdict_record.get('top_passages', [])
     updated['escalated'] = True
+    updated['triage_verdict'] = verdict_record.get('verdict')
     return updated
 
 

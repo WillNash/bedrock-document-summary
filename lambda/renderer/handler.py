@@ -51,10 +51,11 @@ def _parse_claim_output(event):
 
 def _copy_claim_artifacts(job_id, run_prefix, summaries_bucket):
     artifacts = [
-        (f'summaries/{job_id}/pre_render.txt', f'{run_prefix}/pre_render.txt', 'text/plain; charset=utf-8'),
-        (f'summaries/{job_id}/claims.json',     f'{run_prefix}/claims.json',    'application/json'),
-        (f'summaries/{job_id}/triage.json',     f'{run_prefix}/triage.json',    'application/json'),
-        (f'summaries/{job_id}/verdicts.json',   f'{run_prefix}/verdicts.json',  'application/json'),
+        (f'summaries/{job_id}/pre_render.txt',        f'{run_prefix}/pre_render.txt',        'text/plain; charset=utf-8'),
+        (f'summaries/{job_id}/validated_summary.txt', f'{run_prefix}/validated_summary.txt', 'text/plain; charset=utf-8'),
+        (f'summaries/{job_id}/claims.json',           f'{run_prefix}/claims.json',           'application/json'),
+        (f'summaries/{job_id}/triage.json',           f'{run_prefix}/triage.json',           'application/json'),
+        (f'summaries/{job_id}/verdicts.json',         f'{run_prefix}/verdicts.json',         'application/json'),
     ]
     for src_key, dst_key, content_type in artifacts:
         obj = s3_client.get_object(Bucket=summaries_bucket, Key=src_key)
