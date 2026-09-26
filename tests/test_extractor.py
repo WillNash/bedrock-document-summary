@@ -53,6 +53,17 @@ handler = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(handler)
 
 
+def make_text_response(text='Free-form summary text.', input_tokens=2000, output_tokens=300):
+    return {
+        'output': {
+            'message': {
+                'content': [{'text': text}]
+            }
+        },
+        'usage': {'inputTokens': input_tokens, 'outputTokens': output_tokens, 'totalTokens': input_tokens + output_tokens},
+    }
+
+
 def make_tool_use_response(tool_input, input_tokens=2000, output_tokens=300):
     return {
         'output': {
@@ -303,16 +314,17 @@ class TestCustomPromptAndSchema:
         assert result['custom_prompt'] == 'My prompt.'
         assert result['custom_schema'] == custom_schema
 
-    def test_custom_schema_empty_string_falls_back_to_builtin(self):
+    def test_custom_schema_empty_string_does_free_form_extraction(self):
+        free_form_text = 'The patient had elevated WBC.'
         with mock.patch.object(handler, 'bedrock_agent') as mock_agent, \
              mock.patch.object(handler, 'bedrock_runtime') as mock_runtime, \
              mock.patch.object(handler, 's3_client') as mock_s3:
 
             mock_agent.get_prompt.return_value = MOCK_PROMPT_RESPONSE
-            mock_runtime.converse.return_value = make_tool_use_response(EXTRACTED_LAB_RESULT)
+            mock_runtime.converse.return_value = make_text_response(free_form_text)
             mock_s3.get_object.return_value = make_s3_response()
 
-            handler.lambda_handler(
+            result = handler.lambda_handler(
                 {
                     'job_id': 'j-es',
                     'bucket': 'b',
@@ -324,8 +336,9 @@ class TestCustomPromptAndSchema:
             )
 
         call_kwargs = mock_runtime.converse.call_args.kwargs
-        schema_used = call_kwargs['toolConfig']['tools'][0]['toolSpec']['inputSchema']['json']
-        assert schema_used.get('title') == 'LabResult'
+        assert 'toolConfig' not in call_kwargs
+        assert result['extracted_data'] == free_form_text
+        assert result['custom_schema'] == ''
 
     def test_neither_field_in_return_when_not_in_event(self):
         with mock.patch.object(handler, 'bedrock_agent') as mock_agent, \

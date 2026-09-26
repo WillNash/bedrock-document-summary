@@ -202,6 +202,27 @@ class TestRendererHandler:
         assert result['job_id'] == 'job-rdr-1'
         assert result['summary_key'] == 'summaries/job-rdr-1/summary.txt'
 
+    def test_free_form_summary_written_directly_without_template(self):
+        free_form_text = 'Elevated WBC observed. Follow-up recommended.'
+        event = {
+            **SAMPLE_EVENT,
+            'job_id': 'job-rdr-ff',
+            'validated_data': free_form_text,
+            'custom_schema': '',
+        }
+        with mock.patch.object(renderer_handler, 's3_client') as mock_s3, \
+             mock.patch.object(renderer_handler, 'dynamodb') as mock_ddb, \
+             mock.patch.object(renderer_handler, 'sfn_client'):
+
+            mock_table = mock.MagicMock()
+            mock_ddb.Table.return_value = mock_table
+
+            renderer_handler.lambda_handler(event, None)
+
+        put_calls = {c.kwargs['Key']: c.kwargs for c in mock_s3.put_object.call_args_list}
+        summary_body = put_calls['summaries/job-rdr-ff/summary.txt']['Body']
+        assert summary_body == free_form_text.encode('utf-8')
+
 
 class TestRendererExperimentOutputs:
     def _make_ddb_mock(self, completed_n=1, expected_n=5, successful_n=1):

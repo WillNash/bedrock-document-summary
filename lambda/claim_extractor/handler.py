@@ -113,8 +113,11 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     source_bucket = event['bucket']
     source_key = event['key']
 
-    template = jinja_env.get_template(TEMPLATE_FILES[doc_type])
-    summary_text = template.render(**validated_data)
+    if isinstance(validated_data, str):
+        summary_text = validated_data
+    else:
+        template = jinja_env.get_template(TEMPLATE_FILES[doc_type])
+        summary_text = template.render(**validated_data)
 
     pre_render_key = f'summaries/{job_id}/pre_render.txt'
     s3_client.put_object(

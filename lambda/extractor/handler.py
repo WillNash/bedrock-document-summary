@@ -66,8 +66,13 @@ def lambda_handler(event, context):
     s3_response = s3_client.get_object(Bucket=bucket, Key=key)
     document_text = s3_response['Body'].read().decode('utf-8', errors='replace')
 
-    raw_custom_schema = event.get('custom_schema')
-    schema = json.loads(raw_custom_schema) if raw_custom_schema else _load_schema(doc_type)
+    # Mirror the validator's key-presence logic: absent → default, '' → free-form, str → custom
+    if 'custom_schema' not in event:
+        schema = _load_schema(doc_type)
+    elif event['custom_schema']:
+        schema = json.loads(event['custom_schema'])
+    else:
+        schema = None  # '' → free-form, no tool/schema constraint
 
     custom_prompt = event.get('custom_prompt')
     if custom_prompt:
@@ -83,14 +88,6 @@ def lambda_handler(event, context):
     model_id = event.get('extractor_model_id') or os.environ['BEDROCK_MODEL_ID']
     temperature = float(event['temperature']) if event.get('temperature') is not None else 0
 
-    tool_def = {
-        'toolSpec': {
-            'name': 'extract_document',
-            'description': f'Extract structured data from a {doc_type} medical document.',
-            'inputSchema': {'json': schema},
-        }
-    }
-
     guardrail_config = {}
     if os.environ.get('GUARDRAIL_ID') and os.environ.get('GUARDRAIL_VERSION'):
         guardrail_config = {
@@ -99,31 +96,46 @@ def lambda_handler(event, context):
             'trace': 'disabled',
         }
 
-    converse_kwargs = dict(
-        modelId=model_id,
-        system=[{'text': system_prompt}],
-        messages=[{'role': 'user', 'content': [{'text': document_text}]}],
-        toolConfig={
-            'tools': [tool_def],
-            'toolChoice': {'tool': {'name': 'extract_document'}},
-        },
-        inferenceConfig={'maxTokens': 4096, 'temperature': temperature},
-    )
-    if guardrail_config:
-        converse_kwargs['guardrailConfig'] = guardrail_config
-
-    response = bedrock_runtime.converse(**converse_kwargs)
-
-    # Extract toolUse block from response
-    content_blocks = response['output']['message']['content']
-    tool_use_block = next(
-        (block['toolUse'] for block in content_blocks if 'toolUse' in block),
-        None
-    )
-    if tool_use_block is None:
-        raise ValueError('Bedrock response did not contain a toolUse block')
-
-    extracted_data = tool_use_block['input']
+    if schema is not None:
+        tool_def = {
+            'toolSpec': {
+                'name': 'extract_document',
+                'description': f'Extract structured data from a {doc_type} medical document.',
+                'inputSchema': {'json': schema},
+            }
+        }
+        converse_kwargs = dict(
+            modelId=model_id,
+            system=[{'text': system_prompt}],
+            messages=[{'role': 'user', 'content': [{'text': document_text}]}],
+            toolConfig={
+                'tools': [tool_def],
+                'toolChoice': {'tool': {'name': 'extract_document'}},
+            },
+            inferenceConfig={'maxTokens': 4096, 'temperature': temperature},
+        )
+        if guardrail_config:
+            converse_kwargs['guardrailConfig'] = guardrail_config
+        response = bedrock_runtime.converse(**converse_kwargs)
+        content_blocks = response['output']['message']['content']
+        tool_use_block = next(
+            (block['toolUse'] for block in content_blocks if 'toolUse' in block), None
+        )
+        if tool_use_block is None:
+            raise ValueError('Bedrock response did not contain a toolUse block')
+        extracted_data = tool_use_block['input']
+    else:
+        # Free-form: no tool constraint, raw text response becomes the summary
+        converse_kwargs = dict(
+            modelId=model_id,
+            system=[{'text': system_prompt}],
+            messages=[{'role': 'user', 'content': [{'text': document_text}]}],
+            inferenceConfig={'maxTokens': 4096, 'temperature': temperature},
+        )
+        if guardrail_config:
+            converse_kwargs['guardrailConfig'] = guardrail_config
+        response = bedrock_runtime.converse(**converse_kwargs)
+        extracted_data = response['output']['message']['content'][0]['text']
 
     usage = response.get('usage', {})
     logger.info(json.dumps({'job_id': job_id, 'doc_type': doc_type, 'action': 'extracted'}))

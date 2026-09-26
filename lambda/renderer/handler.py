@@ -192,6 +192,9 @@ def lambda_handler(event, context):
     if validated_summary_key:
         obj = s3_client.get_object(Bucket=os.environ['SUMMARIES_BUCKET'], Key=validated_summary_key)
         summary_text = obj['Body'].read().decode('utf-8')
+    elif 'custom_schema' in event and not event['custom_schema']:
+        # Free-form extraction: validated_data is the raw summary text, not a struct
+        summary_text = validated_data
     else:
         template = jinja_env.get_template(TEMPLATE_FILES[doc_type])
         summary_text = template.render(**validated_data)
