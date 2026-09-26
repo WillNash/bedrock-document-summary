@@ -115,7 +115,11 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     with ThreadPoolExecutor(max_workers=_EMBED_WORKERS) as pool:
         passage_embeddings = list(pool.map(_embed, passages))
 
-    verdicts = [_triage_claim(claim, passages, passage_embeddings) for claim in claims]
+    with ThreadPoolExecutor(max_workers=_EMBED_WORKERS) as pool:
+        verdicts = list(pool.map(
+            lambda c: _triage_claim(c, passages, passage_embeddings),
+            claims,
+        ))
 
     triage_key = f'summaries/{job_id}/triage.json'
     s3_client.put_object(

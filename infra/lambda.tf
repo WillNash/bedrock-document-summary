@@ -463,7 +463,7 @@ resource "aws_lambda_function" "claim_extractor" {
   runtime          = "python3.12"
   architectures    = ["arm64"]
   role             = aws_iam_role.claim_validator_processing.arn
-  timeout          = 120
+  timeout          = 300
   memory_size      = 512
   layers           = [aws_lambda_layer_version.deps.arn]
 
@@ -498,7 +498,7 @@ resource "aws_lambda_function" "claim_triager" {
   runtime          = "python3.12"
   architectures    = ["arm64"]
   role             = aws_iam_role.claim_validator_processing.arn
-  timeout          = 120
+  timeout          = 300
   memory_size      = 512
 
   environment {
@@ -532,7 +532,7 @@ resource "aws_lambda_function" "claim_assessor" {
   runtime          = "python3.12"
   architectures    = ["arm64"]
   role             = aws_iam_role.claim_validator_processing.arn
-  timeout          = 120
+  timeout          = 300
   memory_size      = 512
 
   environment {
@@ -565,7 +565,7 @@ resource "aws_lambda_function" "summary_assembler" {
   runtime          = "python3.12"
   architectures    = ["arm64"]
   role             = aws_iam_role.claim_validator_processing.arn
-  timeout          = 120
+  timeout          = 300
   memory_size      = 512
 
   environment {
