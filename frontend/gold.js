@@ -188,6 +188,15 @@ Guidelines:
   },
 };
 
+const FREE_FORM_PROMPT = `You are a clinical document summarization assistant. Read the provided medical document and produce a clear, concise narrative summary suitable for a clinical audience.
+
+Guidelines:
+- Write in fluent clinical prose. Do not produce JSON, structured fields, or bullet-point lists.
+- Cover the key clinical information: the patient context, the nature of the document, the main findings or events, and any significant conclusions or recommendations.
+- Be accurate and faithful to the source document. Do not infer, invent, or add information not present in the document.
+- Omit administrative artefacts (page numbers, headers, reference codes) that are not clinically meaningful.
+- Aim for a summary a clinician could read in under a minute and fully understand the essential content.`;
+
 const cfg = window.APP_CONFIG || {};
 const COGNITO_DOMAIN = cfg.cognitoHostedUiDomain || '';
 const CLIENT_ID = cfg.cognitoClientId || '';
@@ -703,8 +712,19 @@ function onDocTypeChange() {
 function onNoSchemaChange() {
   const noSchema = document.getElementById('no-schema-checkbox').checked;
   const schemaArea = document.getElementById('schema-textarea');
+  const promptArea = document.getElementById('prompt-textarea');
   schemaArea.disabled = noSchema;
-  if (noSchema) schemaArea.value = '';
+  if (noSchema) {
+    schemaArea.value = '';
+    promptArea.value = FREE_FORM_PROMPT;
+  } else {
+    const val = document.getElementById('doc-type-select').value;
+    const dt = DOC_TYPES[val];
+    if (dt) {
+      promptArea.value = dt.prompt;
+      schemaArea.value = dt.schema;
+    }
+  }
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
